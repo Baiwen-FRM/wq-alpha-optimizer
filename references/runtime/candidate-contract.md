@@ -20,6 +20,12 @@ refresh-incumbent --result <json>
 
 refresh 必须绑定当前 Incumbent Alpha ID，要求 authenticated + response_complete + auditable source + timezone timestamp，且不能早于当前 snapshot。refresh 只在没有 OPEN focus/hypothesis 时执行。若只是相同 metrics/check facts 的新时间戳/来源，更新 snapshot freshness 但**不**把 plan 标记 STALE；只有 normalized Result/check facts 实质变化时，当前 `ACTIVE/EXHAUSTED` plan 才标记 `STALE` 并重新 Profile/Plan。用于新 plan 的诊断事实仍须注册普通 evidence refs；refresh snapshot 本身不是 route rationale 的替代品。
 
+### 1B. State write concurrency
+
+Guard state is a single-writer research ledger. Every state snapshot carries an internal revision. Concurrent/stale writers are rejected with `STATE_WRITE_CONFLICT`; controller must re-read the latest state and retry the intended transition serially. Atomic file replacement alone is not enough because it can still lose a newer evidence/decision update.
+
+Do not run two mutating Guard commands in parallel against the same `state_path`. Read-only platform queries may still run concurrently if their results are registered serially.
+
 ## 2. Evidence registry
 
 先注册可审计 evidence，再用 evidence ref 驱动 focus / hypothesis / field allowlist。
