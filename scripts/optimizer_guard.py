@@ -1317,6 +1317,13 @@ class StateStore:
         if focus_type == "ENHANCEMENT":
             if blockers:
                 return {"ok": False, "reason": "ENHANCEMENT_REQUIRES_NO_FAIL_BLOCKERS", "blockers": sorted(blockers)}
+            readiness = _submission_readiness(state)
+            if not readiness.get("ready"):
+                return {
+                    "ok": False,
+                    "reason": "ENHANCEMENT_REQUIRES_RESOLVED_CHECKS",
+                    "readiness": readiness,
+                }
             if blocker:
                 return {"ok": False, "reason": "ENHANCEMENT_MUST_NOT_DECLARE_BLOCKER"}
         else:
