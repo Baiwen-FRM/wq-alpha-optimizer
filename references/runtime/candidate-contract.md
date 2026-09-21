@@ -93,7 +93,7 @@ Promotion 或 current-result refresh 会把旧 plan 标记 `STALE`。Root 第一
 一次只允许一个 open focus：
 
 - `DEFECT`：必须绑定一个当前 `FAIL` blocker，再指定其上游 mechanism owner；没有 FAIL blocker 时 guard 不允许伪造 DEFECT；
-- `ENHANCEMENT`：仅在当前 Incumbent 没有 FAIL blocker、用户明确要求继续提升、且有 evidence-supported opportunity 时使用。
+- `ENHANCEMENT`：仅在当前 Incumbent 没有 FAIL/policy-blocking/unresolved check、用户明确要求继续提升、且有 evidence-supported opportunity 时使用；未分类 WARNING、PENDING/UNKNOWN 或不完整 readiness evidence 必须先 resolve，不能当作 enhancement 许可。
 
 `Evidence Exhausted` 会关闭当前 focus。exhausted family 由 `type + owner + target + mechanism` 定义；同 target/owner 但不同 mechanism 的 pending route 是不同 family，不应被前一个 focus 的 exhaustion 锁死。真正重开同一 exhausted route 时，新的 focus 必须实际引用该 route 的 `new_observation_refs` 中至少一条；仅注册无关/重复 evidence 或继续只引用旧 evidence 都不够。
 
