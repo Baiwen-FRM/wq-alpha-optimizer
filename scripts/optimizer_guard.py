@@ -1784,6 +1784,8 @@ class StateStore:
         # They are valid even if research objects remain open, because requiring
         # artificial cleanup can destroy the evidence of why the run stopped.
         if status not in FORCED_TERMINAL_STATUSES:
+            if not state.get("root_baseline") or not state.get("incumbent"):
+                return {"ok": False, "reason": "STATE_NOT_INITIALIZED"}
             if open_hypotheses:
                 return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": open_hypotheses}
             if focus.get("status") == "OPEN":
