@@ -104,7 +104,8 @@ class PlanningGuardTests(TestCase):
         }
 
     def _promote_current_plan(self, target="SHARPE", evidence="E1", child_id="CHILD", expression="rank(-close)"):
-        opened = self.store.open_hypothesis("H1", self._hypothesis_contract(target, [evidence]))
+        mechanism = (self.store.read().get("focus") or {}).get("mechanism") or "signal_quality"
+        opened = self.store.open_hypothesis("H1", self._hypothesis_contract(target, [evidence], mechanism=mechanism))
         self.assertTrue(opened["ok"], opened)
         candidate = {
             "parent_id": self.store.read()["incumbent"]["alpha_id"],
