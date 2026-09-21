@@ -90,9 +90,10 @@ class PlanningGuardTests(TestCase):
         )
         self.assertTrue(result["ok"], result)
 
-    def _hypothesis_contract(self, target="SHARPE", evidence_refs=None):
+    def _hypothesis_contract(self, target="SHARPE", evidence_refs=None, mechanism="signal_quality"):
         return {
             "target": target,
+            "mechanism": mechanism,
             "principal_hypothesis": "A sign-preserving expression change improves the active target.",
             "mutation": {"type": "expression"},
             "success_criteria": [{"type": "metric", "name": target, "direction": "higher", "min_change": 0}],
@@ -193,6 +194,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         contract = {
             "target": "SHARPE",
+            "mechanism": "signal_quality",
             "principal_hypothesis": "A sign-preserving expression change improves signal quality.",
             "mutation": {"type": "expression"},
             "success_criteria": [{"type": "metric", "name": "SHARPE", "direction": "higher", "min_change": 0}],
@@ -259,6 +261,7 @@ class PlanningGuardTests(TestCase):
             "H1",
             {
                 "target": "SHARPE",
+                "mechanism": "signal_quality",
                 "principal_hypothesis": "Test parent binding.",
                 "mutation": {"type": "expression"},
                 "success_criteria": [{"type": "metric", "name": "SHARPE", "direction": "higher"}],
@@ -494,6 +497,93 @@ class PlanningGuardTests(TestCase):
         )
         self.assertTrue(finished["ok"], finished)
 
+
+
+    def test_initial_empty_plan_can_reach_exhaustion_without_fabricated_route(self):
+        empty = self.store.set_plan({"routes": []})
+        self.assertTrue(empty["ok"], empty)
+        self.assertEqual(empty["plan"]["status"], "EXHAUSTED")
+        self.assertEqual(empty["plan"]["routes"], [])
+        blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No justified normal route exists.")
+        self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
+        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        self.assertTrue(final_replan["ok"], final_replan)
+        finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
+        self.assertTrue(finished["ok"], finished)
+
+    def test_hypothesis_mechanism_must_match_active_route(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")
+            )
+        )
+        self._open_focus()
+        rejected = self.store.open_hypothesis(
+            "H_BAD_MECH",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="tail_robustness"),
+        )
+        self.assertEqual(rejected["reason"], "HYPOTHESIS_MECHANISM_MISMATCH")
+        accepted = self.store.open_hypothesis(
+            "H_GOOD_MECH",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="signal_quality"),
+        )
+        self.assertTrue(accepted["ok"], accepted)
+
+    def test_route_reopen_history_is_scoped_to_incumbent_cycle(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "First route."),
+                ("R2", "SHARPE", "optimization/sharpe.md", "signal_quality_confirmation", ["E1"], "Second route."),
+            )
+        )
+        closed = self.store.close_route("R1", "COMPLETED", "R1 completed for the old incumbent.")
+        self.assertTrue(closed["ok"], closed)
+        self._open_focus(route_id="R2")
+        self._promote_current_plan(child_id="CHILD_HISTORY")
+
+        fresh = self.store.set_plan(
+            self._plan(
+                ("R3", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "The new incumbent may revisit this mechanism.")
+            )
+        )
+        self.assertTrue(fresh["ok"], fresh)
+        self.assertEqual(fresh["plan"]["incumbent_alpha_id"], "CHILD_HISTORY")
+
+    def test_legacy_state_requires_plan_before_new_focus_or_hypothesis(self):
+        legacy = self.store.read()
+        legacy.pop("planning_contract", None)
+        legacy.pop("optimization_plan", None)
+        legacy.pop("optimization_plan_history", None)
+        self.store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        self.assertEqual(self.store.read()["planning_contract"], "legacy")
+
+        focus = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            blocker="LOW_SHARPE",
+            route_id="R1",
+        )
+        self.assertEqual(focus["reason"], "LEGACY_PLAN_REQUIRED")
+
+        # A legacy state with an already-open historical focus may still close it,
+        # but it cannot open a new hypothesis until it installs a v1 plan.
+        legacy = self.store.read()
+        legacy["focus"] = {
+            "type": "DEFECT",
+            "owner": "optimization/sharpe.md",
+            "target": "SHARPE",
+            "blocker": "LOW_SHARPE",
+            "status": "OPEN",
+            "evidence_refs": ["E1"],
+            "revision": 1,
+        }
+        self.store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        hyp = self.store.open_hypothesis("H_LEGACY", self._hypothesis_contract())
+        self.assertEqual(hyp["reason"], "LEGACY_PLAN_REQUIRED")
+        exhausted = self.store.exhaust_focus("Close the historical focus before migration.")
+        self.assertTrue(exhausted["ok"], exhausted)
 
 
 if __name__ == "__main__":
