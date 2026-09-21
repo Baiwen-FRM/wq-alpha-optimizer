@@ -1310,8 +1310,6 @@ class StateStore:
         terminal = _terminal_rejection(state)
         if terminal:
             return terminal
-        if state.get("planning_contract") == "legacy":
-            return {"ok": False, "reason": "LEGACY_PLAN_REQUIRED"}
         planning_rejection = _active_plan_rejection(state)
         if planning_rejection:
             return planning_rejection
@@ -1363,6 +1361,8 @@ class StateStore:
         terminal = _terminal_rejection(state)
         if terminal:
             return terminal
+        if state.get("planning_contract") == "legacy":
+            return {"ok": False, "reason": "LEGACY_PLAN_REQUIRED"}
         planning_rejection = _active_plan_rejection(state)
         if planning_rejection:
             return planning_rejection
