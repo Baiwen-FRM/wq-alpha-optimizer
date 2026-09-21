@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic local guard/state helper for WQ Alpha Optimizer FE candidates.
 
-v3.2.2 principles:
+v3.3.0 principles:
 - Root is immutable; candidates must descend from the current Incumbent.
 - A focus (DEFECT or ENHANCEMENT) is explicit and can be evidence-exhausted.
 - A hypothesis freezes its whole falsifiable contract before simulation.
