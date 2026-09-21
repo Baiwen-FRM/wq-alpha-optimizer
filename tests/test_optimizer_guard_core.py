@@ -515,5 +515,33 @@ class CoreGuardTests(TestCase):
         self.assertTrue(opened["ok"], opened)
 
 
+    def test_new_unresolved_check_makes_candidate_inconclusive(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        self._open_hypothesis()
+        candidate = self._candidate()
+        reserved = self.store.reserve_simulation(candidate)
+        fp = reserved["fingerprint"]
+        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-WARNING")["ok"])
+        result = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-WARNING",
+                "simulation_id": "SIM-WARNING",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:get_submission_check",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.1, "FITNESS": 1.5, "TURNOVER": 0.2},
+                "checks": [
+                    {"name": "LOW_SHARPE", "status": "FAIL"},
+                    {"name": "NEW_PROJECT_WARNING", "status": "WARNING"},
+                ],
+            },
+        )
+        self.assertEqual(result["status"], "INCONCLUSIVE", result)
+        self.assertIn("NEW_PROJECT_WARNING", result["evaluation"]["new_unresolved_checks"])
+
+
 if __name__ == "__main__":
     main()
