@@ -587,5 +587,77 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(exhausted["ok"], exhausted)
 
 
+    def test_next_route_same_target_owner_but_different_mechanism_can_open_with_preexisting_evidence(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "First mechanism."),
+                ("R2", "SHARPE", "optimization/sharpe.md", "exposure_control", ["E2"], "Second mechanism."),
+            )
+        )
+        self._open_focus(route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE")
+        exhausted = self.store.exhaust_focus("The signal-quality mechanism is exhausted.")
+        self.assertEqual(exhausted["next_route"]["id"], "R2")
+
+        opened = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E2"],
+            blocker="LOW_SHARPE",
+            route_id="R2",
+        )
+        self.assertTrue(opened["ok"], opened)
+        self.assertEqual(opened["focus"]["mechanism"], "exposure_control")
+
+    def test_reopened_route_focus_must_use_reopen_observation(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Initial route.")
+            )
+        )
+        self._open_focus()
+        self.store.exhaust_focus("Initial route exhausted.")
+        self.assertTrue(
+            self.store.register_evidence(
+                {
+                    "id": "E_NOVEL_FOCUS",
+                    "kind": "DIAGNOSTIC",
+                    "subject": "TAIL",
+                    "source": "BRAIN:get_record_set_data",
+                    "observed_at": "2026-09-21T00:03:00Z",
+                    "claim": "A genuinely new tail observation changes the signal-quality question.",
+                }
+            )["ok"]
+        )
+        plan = self._plan(
+            ("R1B", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1", "E_NOVEL_FOCUS"], "Novel evidence justifies reopening.")
+        )
+        plan["routes"][0]["reopen_reason"] = "A new tail observation appeared after exhaustion."
+        plan["routes"][0]["new_observation_refs"] = ["E_NOVEL_FOCUS"]
+        plan["based_on_evidence_revision"] = self.store.read()["evidence_revision"]
+        reopened = self.store.set_plan(plan, final_replan=True)
+        self.assertTrue(reopened["ok"], reopened)
+
+        old_only = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            blocker="LOW_SHARPE",
+            route_id="R1B",
+        )
+        self.assertEqual(old_only["reason"], "ROUTE_REOPEN_OBSERVATION_MISMATCH")
+
+        grounded = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1", "E_NOVEL_FOCUS"],
+            blocker="LOW_SHARPE",
+            route_id="R1B",
+        )
+        self.assertTrue(grounded["ok"], grounded)
+
+
 if __name__ == "__main__":
     main()
