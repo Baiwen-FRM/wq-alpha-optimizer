@@ -846,9 +846,29 @@ class StateStore:
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
 
-        # Read-time compatibility enrichment for pre-v3.3 v1 states. These
-        # fields are derivable from existing plan order/binding and do not
-        # rewrite economic or result facts.
+        # Read-time compatibility enrichment for pre-v3.3 state snapshots.
+        # These values are mechanically derivable and do not rewrite economic
+        # or platform facts.
+        for snapshot_key in ("root_baseline", "incumbent"):
+            snapshot = state.get(snapshot_key)
+            if not isinstance(snapshot, dict):
+                continue
+            evidence = snapshot.get("result_evidence")
+            if not isinstance(evidence, dict):
+                continue
+            checks = evidence.get("checks")
+            if not isinstance(checks, list):
+                continue
+            for row in checks:
+                if not isinstance(row, dict) or not row.get("status"):
+                    continue
+                status = str(row.get("status")).upper()
+                row.setdefault("policy_blocking", False)
+                row.setdefault("policy_classified", bool(row.get("policy_blocking")) or status != "WARNING")
+                row.setdefault("blocking", status == "FAIL" or bool(row.get("policy_blocking")))
+
+        # v1 planning compatibility: priority and focus mechanism are derivable
+        # from existing route order/binding.
         plan = state.get("optimization_plan")
         if state.get("planning_contract") == "v1" and isinstance(plan, dict):
             routes = plan.get("routes", [])
