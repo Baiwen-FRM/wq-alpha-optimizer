@@ -63,7 +63,7 @@ vs Root drift note: {...}
 
 | Candidate | Diff | Raw post-sim evidence | vs Incumbent | vs Root | Machine status | Decision |
 |---|---|---|---|---|---|---|
-| {id} | {...} | {source / observed_at / metrics / checks} | {...} | {...} | SUPPORTED / REFUTED / INCONCLUSIVE | promote / reject / stop |
+| {id} | {...} | {source / observed_at / metrics / checks; new blockers / new unresolved checks} | {...} | {...} | SUPPORTED / REFUTED / INCONCLUSIVE | promote / reject / resolve-check / stop |
 
 Iteration conclusion: `{what was learned; what question remains open}`
 
