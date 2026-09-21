@@ -30,3 +30,17 @@ FE preflight 的 `operator_count` 使用内部 `FE_TOKEN_V1`；平台 details/Ju
 | Advanced candidates | regression_neut, ts_quantile, inst_tvr | only after live definition/signature verification |
 
 不要为了 uniqueness 或 operator rarity 堆叠算子。Operator role 必须服务于当前 open hypothesis。
+
+
+## Live operator/schema preflight
+
+`FE_TOKEN_V1` 只保证 lexical structure、identifier 提取和 baseline-relative operator counting。它**不能**证明某个 live operator 的 signature、arity、GROUP/VECTOR/MATRIX 参数类型、named argument 或 NaN behavior 正确。
+
+因此，当 candidate 新增或改变 operator family，或把某个 field/group 传入新的参数角色时，在 reserve/POST 前必须用当前认证 `get_operators()` 定义核对：
+
+- operator 名称当前是否存在并支持 FASTEXPR；
+- positional/named arguments 与 arity；
+- 关键输入 type（例如 GROUP vs MATRIX、VECTOR → scalar requirement）；
+- 当前 NaN/hold/gating 语义是否与 hypothesis 一致。
+
+这一步是 targeted semantic preflight，不是把整个 operator catalog 变成搜索空间。已验证的定义只服务于当前 active route/hypothesis。
