@@ -36,3 +36,10 @@ Numeric tuning 使用 `../runtime/anchors.md` 的可解释尺度。先做 mechan
 机制初步得到支持后，只允许足以验证稳定性的有限 confirmation；confirmation 不是重新打开参数搜索。当前 focus 已不能提出新的 evidence-supported falsifiable question 时，结束该 focus。
 
 Metric improvement alone 不等于 robustness，也不等于必须继续优化。
+
+
+## O7 — Route mechanism is a research boundary
+
+Active route 的 `target + mechanism` 不是标签，而是当前研究边界。v1 hypothesis 必须显式声明同一个 mechanism；不能在同一 target 下从 tail → neutralization → seasonality → momentum → component subtraction 逐个“试一遍”而仍称为同一路线。
+
+一个 mechanism 内可以有少量、能区分同一 causal question 的 candidate（例如同一 persistence mechanism 的 expression-vs-setting implementation），但每个新 candidate 必须说明它相对于上一结果新增了什么可证伪信息。若只是换 operator、窗口、group、系数或 field 表示继续寻找 winner，而没有新的 observation/question，则应 exhaust 当前 route，而不是扩大自由度。
