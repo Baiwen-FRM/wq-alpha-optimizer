@@ -64,7 +64,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 ### C2. ENHANCEMENT
 
-如果当前 blocking checks 全部通过，但用户明确要求继续提升 Result：
+如果当前 checks 已 fresh resolve、没有 blocking/unresolved 项，且用户明确要求继续提升 Result：
 
 1. 不得人为制造 blocker，也不得简单挑“最差的一个数字”开始调参；
 2. 只有存在当前 evidence 支持的、same-thesis、可证伪 improvement opportunity 时才设置 `FOCUS=ENHANCEMENT`；
