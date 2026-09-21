@@ -413,6 +413,16 @@ def _evidence_fingerprint(record: Dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
 
 
+def _result_fact_fingerprint(evidence: Dict[str, Any]) -> str:
+    """Fingerprint current Result/check facts while ignoring source timestamp/order."""
+    metrics = _normalize_metrics((evidence or {}).get("metrics"))
+    checks = _normalize_checks((evidence or {}).get("checks"))
+    canonical_checks = sorted((_copy_json(row) for row in checks), key=_canonical_json)
+    return hashlib.sha256(
+        _canonical_json({"metrics": metrics, "checks": canonical_checks}).encode("utf-8")
+    ).hexdigest()
+
+
 def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     status = (state.get("run") or {}).get("status")
     if status in RUN_TERMINAL_STATUSES:
@@ -975,10 +985,11 @@ class StateStore:
                 return {"ok": True, "already_current": True, "readiness": _submission_readiness(state)}
             return {"ok": False, "reason": "RESULT_REFRESH_TIMESTAMP_CONFLICT"}
 
+        facts_changed = _result_fact_fingerprint(previous) != _result_fact_fingerprint(snapshot)
         incumbent["result_evidence"] = snapshot
         state["incumbent"] = incumbent
         plan = state.get("optimization_plan")
-        if plan and plan.get("status") in {"ACTIVE", "EXHAUSTED"}:
+        if facts_changed and plan and plan.get("status") in {"ACTIVE", "EXHAUSTED"}:
             plan["status"] = "STALE"
             plan["stale_reason"] = "INCUMBENT_RESULT_REFRESHED"
             plan["stale_at_evidence_revision"] = state.get("evidence_revision", 0)
@@ -987,6 +998,7 @@ class StateStore:
         return {
             "ok": True,
             "already_current": False,
+            "facts_changed": facts_changed,
             "incumbent_alpha_id": incumbent.get("alpha_id"),
             "readiness": _submission_readiness(state),
             "plan_status": (state.get("optimization_plan") or {}).get("status"),
@@ -1250,6 +1262,8 @@ class StateStore:
                 return {"ok": False, "reason": "ROUTE_FOCUS_MISMATCH", "route_id": route.get("id")}
             if not set(evidence_refs) & set(route.get("evidence_refs", [])):
                 return {"ok": False, "reason": "ROUTE_EVIDENCE_MISMATCH", "route_id": route.get("id")}
+            if route.get("new_observation_refs") and not (set(evidence_refs) & set(route.get("new_observation_refs", []))):
+                return {"ok": False, "reason": "ROUTE_REOPEN_OBSERVATION_MISMATCH", "route_id": route.get("id")}
             route_id = route.get("id")
             focus_mechanism = route.get("mechanism")
         inc_checks = (state.get("incumbent") or {}).get("result_evidence", {}).get("checks", [])
@@ -1282,6 +1296,7 @@ class StateStore:
                 current.get("type") == focus_type
                 and current.get("owner") == owner
                 and current.get("target") == target
+                and current.get("mechanism") == focus_mechanism
             )
             if same_exhausted_family:
                 newest_ref_revision = max(int(state["evidence"][x].get("revision", 0)) for x in evidence_refs)
