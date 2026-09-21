@@ -18,7 +18,7 @@ Root 初始化和每次 promotion 都保存一个 Incumbent `result_evidence` sn
 refresh-incumbent --result <json>
 ```
 
-refresh 必须绑定当前 Incumbent Alpha ID，要求 authenticated + response_complete + auditable source + timezone timestamp，且不能早于当前 snapshot。refresh 只在没有 OPEN focus/hypothesis 时执行；若内容更新，当前 `ACTIVE/EXHAUSTED` plan 标记 `STALE`，随后重新 Profile/Plan。用于新 plan 的诊断事实仍须注册普通 evidence refs；refresh snapshot 本身不是 route rationale 的替代品。
+refresh 必须绑定当前 Incumbent Alpha ID，要求 authenticated + response_complete + auditable source + timezone timestamp，且不能早于当前 snapshot。refresh 只在没有 OPEN focus/hypothesis 时执行。若只是相同 metrics/check facts 的新时间戳/来源，更新 snapshot freshness 但**不**把 plan 标记 STALE；只有 normalized Result/check facts 实质变化时，当前 `ACTIVE/EXHAUSTED` plan 才标记 `STALE` 并重新 Profile/Plan。用于新 plan 的诊断事实仍须注册普通 evidence refs；refresh snapshot 本身不是 route rationale 的替代品。
 
 ## 2. Evidence registry
 
@@ -95,7 +95,7 @@ Promotion 或 current-result refresh 会把旧 plan 标记 `STALE`。Root 第一
 - `DEFECT`：必须绑定一个当前 `FAIL` blocker，再指定其上游 mechanism owner；没有 FAIL blocker 时 guard 不允许伪造 DEFECT；
 - `ENHANCEMENT`：仅在当前 Incumbent 没有 FAIL blocker、用户明确要求继续提升、且有 evidence-supported opportunity 时使用。
 
-`Evidence Exhausted` 会关闭当前 focus。重新开启同一 exhausted family 时，新的 focus 必须实际引用一条**在 exhaustion 之后注册**的新 evidence；仅注册无关 evidence 或继续引用旧 evidence 都不够。
+`Evidence Exhausted` 会关闭当前 focus。exhausted family 由 `type + owner + target + mechanism` 定义；同 target/owner 但不同 mechanism 的 pending route 是不同 family，不应被前一个 focus 的 exhaustion 锁死。真正重开同一 exhausted route 时，新的 focus 必须实际引用该 route 的 `new_observation_refs` 中至少一条；仅注册无关/重复 evidence 或继续只引用旧 evidence 都不够。
 
 在 v1 planning contract 中，hypothesis 的 `target` 和 `mechanism` 都必须与当前 active focus/route 一致；不能绑定到一个 route 后跳去测试另一个 blocker，也不能在同一 target 下偷偷切换到另一个 mechanism family。
 
