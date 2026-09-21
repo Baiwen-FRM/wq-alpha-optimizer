@@ -49,7 +49,7 @@ expression node → operator/transformation → field → dataset → idea role
 - 每条 route 必须有 target、Primary owner、mechanism、evidence refs 和 rationale；operator 存在性不是 route evidence；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
-- Incumbent promotion 或 `refresh-incumbent` 的 fresh Result/check snapshot 会使旧 plan `STALE`，必须重新 profile/plan；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
+- Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
 - 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 仍为空才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
 
 ## Stage D — FOCUS
