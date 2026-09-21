@@ -3,7 +3,7 @@
 本目录是 runtime 文件地图；具体约束只在各自 owner 文件中维护，optimization reference 不在这里定义。
 
 - `alpha-intake.md`：执行顺序与 run-log 入口。
-- `candidate-contract.md`：机器状态、证据绑定、candidate、transport、result 与 promotion。
+- `candidate-contract.md`：机器状态、current-result refresh、证据绑定、plan/focus/hypothesis、candidate、transport、result、promotion、readiness 与 terminal。
 - `operators.md`：FE tokenization/counting 与 operator-role 口径。
 - `anchors.md`：generic numeric anchors。
 - `regional.md`：当前 region/delay/universe 的诊断语境。

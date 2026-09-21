@@ -26,3 +26,10 @@ Do not use this file to invent a new dataset, region or return logic. If the onl
 ### Python boundary
 
 Python-specific FIR、Kalman、FFT、Haar/DWT、IIR、store、NaN、dtype、warm-up 和因果回放规则统一由 `wq-python-alpha/references/signal-processing.md` 与其 Python contract 维护。本文件只负责决定当前 Alpha 是否需要一个同 thesis 的结构机制；一旦路线进入 Python 实现，就交给 `wq-python-alpha`，不要在 optimizer 内重复实现。
+
+
+### Algebra / component-removal discipline
+
+不要把 `subtract(composite, component)` 自动解释成“移除了该 component”。只有在当前 expression 的代数分解明确证明 `composite = component + remainder`（含相同缩放、归一化、group/rank placement 与 NaN 语义）时，这种 subtraction 才能代表真正的 component ablation。否则它只是一个新的 nonlinear expression，必须按新的机制解释，不能用“去掉某因子”的叙事包装。
+
+同理，component 权重、0.5/1.5 等系数没有当前 Alpha 的结构/经济证据时不是 canonical anchor；不要通过连续加减组件或权重形成 serial operator search。

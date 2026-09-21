@@ -11,10 +11,16 @@ python3 scripts/optimizer_guard.py --help
 ```
 
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
-`close-route`, `exhaust-focus`, and `finish-run`. `set-plan --final-replan`
-is accepted only after all routes in the current plan are terminal and can be
-used once per Incumbent/plan cycle. `finish-run --status
-COMPLETED_WITH_EXHAUSTION` requires that final re-plan gate plus no open
-hypothesis, focus, or pending/active route.
+`close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
+`set-plan --final-replan` is accepted only after all routes in the current plan
+are terminal and can be used once per Incumbent cycle. Root or a legitimate
+STALE re-profile may install an empty EXHAUSTED plan rather than fabricating a
+route. `refresh-incumbent` updates the current authenticated Result/check
+snapshot and stales an existing plan when facts change.
+
+`finish-run --status COMPLETED_WITH_EXHAUSTION` requires the final re-plan
+gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the current
+Incumbent check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
+`PLATFORM_UNRECOVERABLE` are explicit terminal freeze states.
 
 Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经济因果或远端 source authenticity；这些必须来自当前认证平台 evidence 与 Primary defect reference。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic local guard/state helper for WQ Alpha Optimizer FE candidates.
 
-v3.2.2 principles:
+v3.3.0 principles:
 - Root is immutable; candidates must descend from the current Incumbent.
 - A focus (DEFECT or ENHANCEMENT) is explicit and can be evidence-exhausted.
 - A hypothesis freezes its whole falsifiable contract before simulation.
@@ -89,7 +89,15 @@ TRANSPORT_TRANSITIONS = {
 }
 PLAN_ROUTE_STATUSES = {"PENDING", "ACTIVE", "EXHAUSTED", "DISMISSED", "COMPLETED"}
 TERMINAL_ROUTE_STATUSES = {"EXHAUSTED", "DISMISSED", "COMPLETED"}
-RUN_TERMINAL_STATUSES = {"SUCCESS", "SUBMISSION_READY", "COMPLETED_WITH_EXHAUSTION"}
+RUN_TERMINAL_STATUSES = {
+    "SUCCESS",
+    "SUBMISSION_READY",
+    "COMPLETED_WITH_EXHAUSTION",
+    "USER_STOP",
+    "SCOPE_BOUNDARY",
+    "PLATFORM_UNRECOVERABLE",
+}
+FORCED_TERMINAL_STATUSES = {"USER_STOP", "SCOPE_BOUNDARY", "PLATFORM_UNRECOVERABLE"}
 
 # Lightweight Fast Expression tokenizer. It intentionally validates lexical and
 # delimiter structure, not live operator signatures or arity.
@@ -289,15 +297,23 @@ def _normalize_checks(checks: Any) -> list[Dict[str, Any]]:
     if not isinstance(checks, list):
         raise ValueError("checks must be a list")
     out = []
+    seen_names = set()
     for item in checks:
         if not isinstance(item, dict) or not _nonempty(item.get("name")) or not _nonempty(item.get("status")):
             raise ValueError("each check needs name/status")
         row = dict(item)
-        row["name"] = str(row["name"])
+        check_name = str(row["name"])
+        if check_name in seen_names:
+            raise ValueError(f"duplicate check name: {check_name}")
+        seen_names.add(check_name)
+        row["name"] = check_name
         row["status"] = str(row["status"]).upper()
-        # FAIL is always blocking. A current platform/project policy may also
-        # mark WARNING (or another status) as blocking via policy_blocking.
+        # FAIL is always blocking. WARNING needs an explicit project/platform
+        # classification before it can support SUBMISSION_READY. A blocking
+        # classification is itself explicit; non-blocking WARNING requires
+        # policy_classified=true from the controller.
         row["policy_blocking"] = bool(row.get("policy_blocking", False))
+        row["policy_classified"] = bool(row.get("policy_classified", False) or row["policy_blocking"] or row["status"] != "WARNING")
         row["blocking"] = row["status"] == "FAIL" or row["policy_blocking"]
         out.append(row)
     return out
@@ -318,6 +334,18 @@ def _normalize_metrics(metrics: Any) -> Dict[str, float]:
 
 def _fail_blockers(checks: list[Dict[str, Any]]) -> set[str]:
     return {str(c["name"]) for c in checks if bool(c.get("blocking")) or str(c.get("status", "")).upper() == "FAIL"}
+
+
+def _unresolved_checks(checks: list[Dict[str, Any]]) -> set[str]:
+    unresolved = set()
+    for row in checks:
+        status = str(row.get("status", "")).upper()
+        if status == "PASS" or row.get("blocking"):
+            continue
+        if status == "WARNING" and row.get("policy_classified"):
+            continue
+        unresolved.add(str(row.get("name")))
+    return unresolved
 
 
 def _snapshot_from_json(baseline: Dict[str, Any], root_alpha_id: str) -> Dict[str, Any]:
@@ -402,11 +430,57 @@ def _evidence_fingerprint(record: Dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
 
 
+def _result_fact_fingerprint(evidence: Dict[str, Any]) -> str:
+    """Fingerprint current Result/check facts while ignoring source timestamp/order."""
+    metrics = _normalize_metrics((evidence or {}).get("metrics"))
+    checks = _normalize_checks((evidence or {}).get("checks"))
+    canonical_checks = sorted((_copy_json(row) for row in checks), key=_canonical_json)
+    return hashlib.sha256(
+        _canonical_json({"metrics": metrics, "checks": canonical_checks}).encode("utf-8")
+    ).hexdigest()
+
+
 def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     status = (state.get("run") or {}).get("status")
     if status in RUN_TERMINAL_STATUSES:
         return {"ok": False, "reason": "RUN_ALREADY_TERMINAL", "status": status}
     return None
+
+
+def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
+    incumbent = state.get("incumbent") or {}
+    if not incumbent:
+        return {"ready": False, "reason": "STATE_NOT_INITIALIZED", "blockers": [], "unresolved_checks": []}
+    evidence = incumbent.get("result_evidence") or {}
+    if not evidence.get("response_complete") or not evidence.get("authenticated"):
+        return {"ready": False, "reason": "READINESS_EVIDENCE_INCOMPLETE", "blockers": [], "unresolved_checks": []}
+    source = evidence.get("source")
+    observed_at = evidence.get("observed_at")
+    if not isinstance(source, str) or ":" not in source or not observed_at:
+        return {"ready": False, "reason": "READINESS_EVIDENCE_NOT_AUDITABLE", "blockers": [], "unresolved_checks": []}
+    try:
+        _parse_iso(observed_at)
+        checks = _normalize_checks(evidence.get("checks"))
+    except ValueError as exc:
+        return {"ready": False, "reason": "READINESS_EVIDENCE_CONTRACT", "detail": str(exc), "blockers": [], "unresolved_checks": []}
+    if not checks:
+        return {"ready": False, "reason": "READINESS_CHECKS_REQUIRED", "blockers": [], "unresolved_checks": []}
+
+    blockers = sorted(_fail_blockers(checks))
+    unresolved = sorted(_unresolved_checks(checks))
+
+    if blockers:
+        return {"ready": False, "reason": "CURRENT_BLOCKERS_REMAIN", "blockers": blockers, "unresolved_checks": unresolved}
+    if unresolved:
+        return {"ready": False, "reason": "READINESS_CHECKS_UNRESOLVED", "blockers": [], "unresolved_checks": unresolved}
+    return {
+        "ready": True,
+        "reason": None,
+        "blockers": [],
+        "unresolved_checks": [],
+        "observed_at": observed_at,
+        "source": source,
+    }
 
 
 def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -515,6 +589,8 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         "failure_meaning": str(contract["failure_meaning"]).strip(),
         "evidence_refs": sorted(dict.fromkeys(refs)),
     }
+    if _nonempty(contract.get("mechanism")):
+        out["mechanism"] = str(contract["mechanism"]).strip()
     if _nonempty(contract.get("complexity_reason")):
         out["complexity_reason"] = str(contract["complexity_reason"]).strip()
     if _nonempty(contract.get("field_change_reason")):
@@ -580,12 +656,12 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
 
     root = state.get("root_baseline")
     incumbent = state.get("incumbent")
+    if not root or not incumbent:
+        return {"valid": False, "reject_code": "STATE_NOT_INITIALIZED"}
     planning_rejection = _active_plan_rejection(state)
     if planning_rejection:
         return {"valid": False, "reject_code": planning_rejection["reason"]}
     focus = state.get("focus")
-    if not root or not incumbent:
-        return {"valid": False, "reject_code": "STATE_NOT_INITIALIZED"}
     if not focus or focus.get("status") != "OPEN":
         return {"valid": False, "reject_code": "NO_OPEN_FOCUS", "focus": focus}
     if str(candidate["parent_id"]) != str(incumbent.get("alpha_id")):
@@ -714,9 +790,17 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         passed = a >= b - tol if p["rule"] == "not_lower" else a <= b + tol
         protected_results.append({"policy": p, "before": b, "after": a, "passed": passed})
 
+    before_check_names = {str(row["name"]) for row in before_checks}
+    after_check_names = {str(row["name"]) for row in after_checks}
+    missing_prior_checks = before_check_names - after_check_names
+    missing.extend(f"check:{name}" for name in sorted(missing_prior_checks))
+
     old_blockers = _fail_blockers(before_checks)
     new_blockers = _fail_blockers(after_checks) - old_blockers
-    if missing:
+    old_unresolved = _unresolved_checks(before_checks)
+    candidate_unresolved = _unresolved_checks(after_checks)
+    new_unresolved = candidate_unresolved - old_unresolved
+    if missing or new_unresolved:
         status = "INCONCLUSIVE"
     elif criterion_results and all(x["passed"] for x in criterion_results) and all(x["passed"] for x in protected_results) and not new_blockers:
         status = "SUPPORTED"
@@ -730,6 +814,10 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         "old_blockers": sorted(old_blockers),
         "candidate_blockers": sorted(_fail_blockers(after_checks)),
         "new_blockers": sorted(new_blockers),
+        "old_unresolved_checks": sorted(old_unresolved),
+        "candidate_unresolved_checks": sorted(candidate_unresolved),
+        "new_unresolved_checks": sorted(new_unresolved),
+        "missing_prior_checks": sorted(missing_prior_checks),
     }
 
 
@@ -777,6 +865,52 @@ class StateStore:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v1"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
+
+        # Read-time compatibility enrichment for pre-v3.3 state snapshots.
+        # These values are mechanically derivable and do not rewrite economic
+        # or platform facts.
+        for snapshot_key in ("root_baseline", "incumbent"):
+            snapshot = state.get(snapshot_key)
+            if not isinstance(snapshot, dict):
+                continue
+            evidence = snapshot.get("result_evidence")
+            if not isinstance(evidence, dict):
+                continue
+            checks = evidence.get("checks")
+            if not isinstance(checks, list):
+                continue
+            for row in checks:
+                if not isinstance(row, dict) or not row.get("status"):
+                    continue
+                status = str(row.get("status")).upper()
+                row.setdefault("policy_blocking", False)
+                row.setdefault("policy_classified", bool(row.get("policy_blocking")) or status != "WARNING")
+                row.setdefault("blocking", status == "FAIL" or bool(row.get("policy_blocking")))
+
+        # v1 planning compatibility: priority and focus mechanism are derivable
+        # from existing route order/binding.
+        plan = state.get("optimization_plan")
+        if state.get("planning_contract") == "v1" and isinstance(plan, dict):
+            routes = plan.get("routes", [])
+            for priority, route in enumerate(routes, start=1):
+                route.setdefault("priority", priority)
+            focus = state.get("focus")
+            if isinstance(focus, dict) and not focus.get("mechanism"):
+                route = None
+                if focus.get("route_id"):
+                    route = next((item for item in routes if item.get("id") == focus.get("route_id")), None)
+                if route is None:
+                    matching = [
+                        item for item in routes
+                        if item.get("status") == "ACTIVE"
+                        and item.get("owner") == focus.get("owner")
+                        and item.get("target") == focus.get("target")
+                    ]
+                    if len(matching) == 1:
+                        route = matching[0]
+                if route and route.get("mechanism"):
+                    focus["mechanism"] = route.get("mechanism")
+                    state["focus"] = focus
         return state
 
     def _ensure_run_log(self, state: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
@@ -852,6 +986,111 @@ class StateStore:
         self._write(state)
         return {"initialized": True, "already_initialized": False, "root_alpha_id": self.root_alpha_id, "incumbent_alpha_id": snapshot["alpha_id"], "allowed_fields": snapshot["fields"], "log_path": state["run"]["log_path"], "log_created_or_recreated": log_created}
 
+    def refresh_incumbent_result(self, result_evidence: Dict[str, Any]) -> Dict[str, Any]:
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        incumbent = state.get("incumbent")
+        if not incumbent:
+            return {"ok": False, "reason": "STATE_NOT_INITIALIZED"}
+        if (state.get("focus") or {}).get("status") == "OPEN":
+            return {"ok": False, "reason": "REFRESH_REQUIRES_CLOSED_FOCUS"}
+        open_hypotheses = [key for key, item in state.get("hypotheses", {}).items() if item.get("status") == "OPEN"]
+        if open_hypotheses:
+            return {"ok": False, "reason": "REFRESH_REQUIRES_NO_OPEN_HYPOTHESIS", "hypotheses": open_hypotheses}
+
+        required = ("alpha_id", "observed_at", "source", "response_complete", "authenticated", "metrics", "checks")
+        missing = [key for key in required if key not in result_evidence]
+        if missing:
+            return {"ok": False, "reason": "RESULT_REFRESH_CONTRACT", "missing": missing}
+        if str(result_evidence.get("alpha_id")) != str(incumbent.get("alpha_id")):
+            return {
+                "ok": False,
+                "reason": "RESULT_REFRESH_ALPHA_MISMATCH",
+                "expected_alpha_id": incumbent.get("alpha_id"),
+                "alpha_id": result_evidence.get("alpha_id"),
+            }
+        try:
+            observed = _parse_iso(result_evidence.get("observed_at"))
+            metrics = _normalize_metrics(result_evidence.get("metrics"))
+            checks = _normalize_checks(result_evidence.get("checks"))
+        except ValueError as exc:
+            return {"ok": False, "reason": "RESULT_REFRESH_CONTRACT", "detail": str(exc)}
+        if not result_evidence.get("response_complete") or not result_evidence.get("authenticated"):
+            return {"ok": False, "reason": "INCOMPLETE_OR_UNAUTHENTICATED_EVIDENCE"}
+        source = result_evidence.get("source")
+        if not isinstance(source, str) or ":" not in source:
+            return {"ok": False, "reason": "RESULT_SOURCE_NOT_AUDITABLE"}
+
+        previous = incumbent.get("result_evidence") or {}
+        previous_observed = previous.get("observed_at")
+        if previous_observed:
+            try:
+                previous_dt = _parse_iso(previous_observed)
+            except ValueError:
+                previous_dt = None
+            if previous_dt and observed < previous_dt:
+                return {
+                    "ok": False,
+                    "reason": "STALE_RESULT_REFRESH",
+                    "observed_at": result_evidence.get("observed_at"),
+                    "current_observed_at": previous_observed,
+                }
+
+        previous_checks = _normalize_checks(previous.get("checks")) if previous else []
+        previous_check_names = {str(row["name"]) for row in previous_checks}
+        current_check_names = {str(row["name"]) for row in checks}
+        missing_prior_checks = sorted(previous_check_names - current_check_names)
+        if missing_prior_checks:
+            return {
+                "ok": False,
+                "reason": "RESULT_REFRESH_CHECK_SET_INCOMPLETE",
+                "missing_checks": missing_prior_checks,
+            }
+
+        snapshot = {
+            "metrics": metrics,
+            "checks": checks,
+            "observed_at": str(result_evidence["observed_at"]),
+            "source": str(source),
+            "response_complete": True,
+            "authenticated": True,
+        }
+        if previous_observed and observed == _parse_iso(previous_observed):
+            if _result_fact_fingerprint(previous) == _result_fact_fingerprint(snapshot):
+                incumbent["result_evidence"] = snapshot
+                state["incumbent"] = incumbent
+                self._write(state)
+                return {
+                    "ok": True,
+                    "already_current": True,
+                    "facts_changed": False,
+                    "incumbent_alpha_id": incumbent.get("alpha_id"),
+                    "readiness": _submission_readiness(state),
+                    "plan_status": (state.get("optimization_plan") or {}).get("status"),
+                }
+            return {"ok": False, "reason": "RESULT_REFRESH_TIMESTAMP_CONFLICT"}
+
+        facts_changed = _result_fact_fingerprint(previous) != _result_fact_fingerprint(snapshot)
+        incumbent["result_evidence"] = snapshot
+        state["incumbent"] = incumbent
+        plan = state.get("optimization_plan")
+        if facts_changed and plan and plan.get("status") in {"ACTIVE", "EXHAUSTED"}:
+            plan["status"] = "STALE"
+            plan["stale_reason"] = "INCUMBENT_RESULT_REFRESHED"
+            plan["stale_at_evidence_revision"] = state.get("evidence_revision", 0)
+            state["optimization_plan"] = plan
+        self._write(state)
+        return {
+            "ok": True,
+            "already_current": False,
+            "facts_changed": facts_changed,
+            "incumbent_alpha_id": incumbent.get("alpha_id"),
+            "readiness": _submission_readiness(state),
+            "plan_status": (state.get("optimization_plan") or {}).get("status"),
+        }
+
     def register_evidence(self, record: Dict[str, Any]) -> Dict[str, Any]:
         try:
             normalized = _validate_evidence_record(record)
@@ -882,6 +1121,8 @@ class StateStore:
         terminal = _terminal_rejection(state)
         if terminal:
             return terminal
+        if not state.get("root_baseline") or not state.get("incumbent"):
+            return {"ok": False, "reason": "STATE_NOT_INITIALIZED"}
         current = state.get("optimization_plan")
         if (state.get("focus") or {}).get("status") == "OPEN":
             return {"ok": False, "reason": "PLAN_REQUIRES_CLOSED_FOCUS"}
@@ -914,10 +1155,12 @@ class StateStore:
         raw_routes = plan.get("routes", [])
         if not isinstance(raw_routes, list):
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
-        # A newly promoted Incumbent may legitimately have no normal routes after
-        # re-profile. Install an empty EXHAUSTED plan for that new cycle so the
-        # mandatory one-time final re-plan can run without fabricating a route.
-        if not raw_routes and not final_replan and not new_incumbent_cycle:
+        # The initial Root profile or any legitimate STALE re-profile may
+        # find no justified normal route. Install an empty EXHAUSTED plan rather
+        # than fabricating a route. A new Incumbent resets final-replan usage;
+        # a same-Incumbent refresh preserves that cycle's existing allowance.
+        allow_empty_fresh_profile = current is None or (current or {}).get("status") == "STALE"
+        if not raw_routes and not final_replan and not allow_empty_fresh_profile:
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
         try:
             based_on_evidence_revision = int(plan.get("based_on_evidence_revision", state.get("evidence_revision", 0)))
@@ -958,12 +1201,18 @@ class StateStore:
             return {"ok": False, "reason": "MULTIPLE_ACTIVE_ROUTES"}
         if routes and not active:
             routes[0]["status"] = "ACTIVE"
+        for priority, route in enumerate(routes, start=1):
+            route["priority"] = priority
 
+        # Exhaustion/reopen history is scoped to the current Incumbent cycle.
+        # A promoted Incumbent is a materially new parent and may legitimately
+        # revisit a mechanism that was terminal for its predecessor.
         historical_routes = []
-        if current:
+        if current and str(current.get("incumbent_alpha_id")) == str(incumbent_id):
             historical_routes.extend(current.get("routes", []))
         for old_plan in state.get("optimization_plan_history", []):
-            historical_routes.extend(old_plan.get("routes", []))
+            if str(old_plan.get("incumbent_alpha_id")) == str(incumbent_id):
+                historical_routes.extend(old_plan.get("routes", []))
         for route in routes:
             previous = [old for old in historical_routes if _route_key(old) == _route_key(route) and old.get("status") in TERMINAL_ROUTE_STATUSES]
             if not previous:
@@ -1081,6 +1330,9 @@ class StateStore:
         if missing:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing}
         plan = state.get("optimization_plan")
+        if state.get("planning_contract") == "legacy":
+            return {"ok": False, "reason": "LEGACY_PLAN_REQUIRED"}
+        focus_mechanism = None
         if state.get("planning_contract") == "v1":
             planning_rejection = _active_plan_rejection(state)
             if planning_rejection:
@@ -1097,12 +1349,22 @@ class StateStore:
                 return {"ok": False, "reason": "ROUTE_FOCUS_MISMATCH", "route_id": route.get("id")}
             if not set(evidence_refs) & set(route.get("evidence_refs", [])):
                 return {"ok": False, "reason": "ROUTE_EVIDENCE_MISMATCH", "route_id": route.get("id")}
+            if route.get("new_observation_refs") and not (set(evidence_refs) & set(route.get("new_observation_refs", []))):
+                return {"ok": False, "reason": "ROUTE_REOPEN_OBSERVATION_MISMATCH", "route_id": route.get("id")}
             route_id = route.get("id")
+            focus_mechanism = route.get("mechanism")
         inc_checks = (state.get("incumbent") or {}).get("result_evidence", {}).get("checks", [])
         blockers = _fail_blockers(_normalize_checks(inc_checks))
         if focus_type == "ENHANCEMENT":
             if blockers:
                 return {"ok": False, "reason": "ENHANCEMENT_REQUIRES_NO_FAIL_BLOCKERS", "blockers": sorted(blockers)}
+            readiness = _submission_readiness(state)
+            if not readiness.get("ready"):
+                return {
+                    "ok": False,
+                    "reason": "ENHANCEMENT_REQUIRES_RESOLVED_CHECKS",
+                    "readiness": readiness,
+                }
             if blocker:
                 return {"ok": False, "reason": "ENHANCEMENT_MUST_NOT_DECLARE_BLOCKER"}
         else:
@@ -1116,6 +1378,7 @@ class StateStore:
                 current.get("type") == focus_type
                 and current.get("owner") == owner
                 and current.get("target") == target
+                and current.get("mechanism") == focus_mechanism
                 and current.get("blocker") == (blocker if focus_type == "DEFECT" else None)
                 and set(current.get("evidence_refs", [])) == set(evidence_refs)
             )
@@ -1127,6 +1390,7 @@ class StateStore:
                 current.get("type") == focus_type
                 and current.get("owner") == owner
                 and current.get("target") == target
+                and current.get("mechanism") == focus_mechanism
             )
             if same_exhausted_family:
                 newest_ref_revision = max(int(state["evidence"][x].get("revision", 0)) for x in evidence_refs)
@@ -1137,6 +1401,7 @@ class StateStore:
             "type": focus_type,
             "owner": owner,
             "target": target,
+            "mechanism": focus_mechanism,
             "blocker": blocker if focus_type == "DEFECT" else None,
             "status": "OPEN",
             "evidence_refs": sorted(dict.fromkeys(evidence_refs)),
@@ -1206,6 +1471,8 @@ class StateStore:
         terminal = _terminal_rejection(state)
         if terminal:
             return terminal
+        if state.get("planning_contract") == "legacy":
+            return {"ok": False, "reason": "LEGACY_PLAN_REQUIRED"}
         planning_rejection = _active_plan_rejection(state)
         if planning_rejection:
             return planning_rejection
@@ -1219,6 +1486,16 @@ class StateStore:
             return {"ok": False, "reason": "HYPOTHESIS_NOT_GROUNDED_IN_FOCUS_EVIDENCE"}
         if state.get("planning_contract") == "v1" and normalized["target"] != focus.get("target"):
             return {"ok": False, "reason": "HYPOTHESIS_TARGET_MISMATCH", "focus_target": focus.get("target"), "hypothesis_target": normalized["target"]}
+        if state.get("planning_contract") == "v1":
+            if not _nonempty(normalized.get("mechanism")):
+                return {"ok": False, "reason": "HYPOTHESIS_MECHANISM_REQUIRED"}
+            if normalized.get("mechanism") != focus.get("mechanism"):
+                return {
+                    "ok": False,
+                    "reason": "HYPOTHESIS_MECHANISM_MISMATCH",
+                    "focus_mechanism": focus.get("mechanism"),
+                    "hypothesis_mechanism": normalized.get("mechanism"),
+                }
         old = state["hypotheses"].get(hypothesis_id)
         if old:
             if old.get("status") == "OPEN" and _canonical_json(old.get("contract")) == _canonical_json(normalized):
@@ -1534,17 +1811,29 @@ class StateStore:
         plan = state.get("optimization_plan")
         focus = state.get("focus") or {}
         open_hypotheses = [key for key, item in state.get("hypotheses", {}).items() if item.get("status") == "OPEN"]
-        if open_hypotheses:
-            return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": open_hypotheses}
-        if focus.get("status") == "OPEN":
-            return {"ok": False, "reason": "OPEN_FOCUS_EXISTS"}
-        if status == "COMPLETED_WITH_EXHAUSTION":
-            if not plan or not plan.get("final_replan_used"):
-                return {"ok": False, "reason": "FINAL_REPLAN_REQUIRED"}
-            if any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in plan.get("routes", [])):
-                return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
-        elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
-            return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
+
+        # Explicit abort/boundary terminals freeze the state exactly as observed.
+        # They are valid even if research objects remain open, because requiring
+        # artificial cleanup can destroy the evidence of why the run stopped.
+        if status not in FORCED_TERMINAL_STATUSES:
+            if not state.get("root_baseline") or not state.get("incumbent"):
+                return {"ok": False, "reason": "STATE_NOT_INITIALIZED"}
+            if open_hypotheses:
+                return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": open_hypotheses}
+            if focus.get("status") == "OPEN":
+                return {"ok": False, "reason": "OPEN_FOCUS_EXISTS"}
+
+            if status == "COMPLETED_WITH_EXHAUSTION":
+                if not plan or not plan.get("final_replan_used"):
+                    return {"ok": False, "reason": "FINAL_REPLAN_REQUIRED"}
+                if plan.get("status") != "EXHAUSTED" or any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in plan.get("routes", [])):
+                    return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
+            elif status == "SUBMISSION_READY":
+                readiness = _submission_readiness(state)
+                if not readiness.get("ready"):
+                    return {"ok": False, "reason": readiness.get("reason"), "readiness": readiness}
+            elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
+                return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
         run["finished_at"] = _now_iso()
         run["end_reason"] = reason.strip()
@@ -1574,6 +1863,7 @@ class StateStore:
             "allowed_fields": state.get("allowed_fields", []),
             "hypotheses": {k: v.get("status") for k, v in state.get("hypotheses", {}).items()},
             "simulation_states": {k: v.get("status") for k, v in state.get("simulations", {}).items()},
+            "submission_readiness": _submission_readiness(state),
         }
 
 
@@ -1618,6 +1908,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("append-log"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--section", required=True); p.add_argument("--text-file")
     p = sub.add_parser("status"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("register-evidence"); p.add_argument("--evidence", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("refresh-incumbent"); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("set-plan"); p.add_argument("--plan", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--final-replan", action="store_true")
     p = sub.add_parser("activate-route"); p.add_argument("--route-id", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("close-route"); p.add_argument("--route-id", required=True); p.add_argument("--status", required=True, choices=["DISMISSED", "COMPLETED"]); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
@@ -1642,6 +1933,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "append-log": out = StateStore(args.state, args.root_alpha_id).append_log(args.section, _load_text_arg(args.text_file))
         elif args.cmd == "status": out = StateStore(args.state, args.root_alpha_id).summary()
         elif args.cmd == "register-evidence": out = StateStore(args.state, args.root_alpha_id).register_evidence(_load_json_arg(args.evidence))
+        elif args.cmd == "refresh-incumbent": out = StateStore(args.state, args.root_alpha_id).refresh_incumbent_result(_load_json_arg(args.result))
         elif args.cmd == "set-plan": out = StateStore(args.state, args.root_alpha_id).set_plan(_load_json_arg(args.plan), final_replan=args.final_replan)
         elif args.cmd == "activate-route": out = StateStore(args.state, args.root_alpha_id).activate_route(args.route_id)
         elif args.cmd == "close-route": out = StateStore(args.state, args.root_alpha_id).close_route(args.route_id, args.status, args.reason)

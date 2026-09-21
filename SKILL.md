@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.2.2
+  version: 3.3.0
 ---
 
 # WQ Alpha Optimizer
@@ -22,8 +22,10 @@ metadata:
 - **Minimal causal change.** 一次实验只回答一个 principal mechanism；复杂度增加必须由该机制解释。
 - **Result facts before conclusions.** 平台结果/check evidence 先于“成功/失败”叙事；指标变好本身不等于机制得到支持。
 - **Stop is a valid outcome.** 当前 scope 内没有新的合理可证伪问题时停止，而不是扩大自由度。
-- **Plan before focus.** 在第一次 candidate 前，先用已注册 evidence 形成 mechanism-level optimization plan；多个 route 可以 pending，但一次只执行一个 active route。
-- **Focus exhaustion is not run exhaustion.** 当前 route 耗尽后切换下一个 pending route；只有一次 final re-plan 也没有新 justified route 时，才以 exhaustion 结束 run。
+- **Plan before focus.** 在第一次 candidate 前，先用已注册 evidence 形成 ordered mechanism-level optimization plan；多个 route 可以 pending，但一次只执行一个 active route，hypothesis 必须绑定该 route 的 target + mechanism。
+- **Fresh facts invalidate stale execution.** Incumbent promotion 或显式 fresh Result/check refresh 后，旧 plan 不得继续机械执行；重新 Profile/Plan。旧 legacy run 只能完成已有在途工作，不能在未安装 v1 plan 时开启新的 focus/hypothesis。
+- **Focus exhaustion is not run exhaustion.** 当前 route 耗尽后切换下一个 pending route；Root/Incumbent profile 可以合法得到空 plan，不得为了继续而虚构 route。只有该 Incumbent cycle 的一次 final re-plan 也没有新 justified route 时，才以 exhaustion 结束 run。
+- **Terminal means terminal.** `SUBMISSION_READY` 必须由当前 Incumbent 的完整、认证、可审计 checks 证明；`USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，结束后不再改变 research state。
 
 ## Routing
 

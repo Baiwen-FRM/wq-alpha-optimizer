@@ -2,7 +2,7 @@
 
 本文件是当前 Alpha Result / submission checks → 最小 Primary owner 的唯一总路由。平台当前 `value / limit / status` 是权威事实；reference 产生 hypothesis，不拥有 workflow state。
 
-进入路由前先完成 `runtime/alpha-intake.md` 的 ROOT、core DIAGNOSE 与 PROFILE。**多个 blocker 并存时，不按数值最差项机械排序：优先选择有证据支持、最上游、能够解释一个或多个下游失败项的 mechanism owner。** Planner 可以把多个不同 mechanism route 排入 pending plan；执行时只激活一个 Primary owner。修复/排除或 promotion 后重新读取 fresh checks，再次路由。
+进入路由前先完成 `runtime/alpha-intake.md` 的 ROOT、core DIAGNOSE 与 PROFILE。**多个 blocker 并存时，不按数值最差项机械排序：优先选择有证据支持、最上游、能够解释一个或多个下游失败项的 mechanism owner。** Planner 可以把多个不同 mechanism route 按优先顺序排入 pending plan；执行时只激活一个 Primary owner。route 数组顺序就是执行优先级。修复/排除、promotion 或 current-result refresh 后重新读取 fresh checks，再次路由；新 Incumbent 不继承前任 route exhaustion。
 
 ## Metric / Check Router
 

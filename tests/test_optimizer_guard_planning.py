@@ -90,9 +90,10 @@ class PlanningGuardTests(TestCase):
         )
         self.assertTrue(result["ok"], result)
 
-    def _hypothesis_contract(self, target="SHARPE", evidence_refs=None):
+    def _hypothesis_contract(self, target="SHARPE", evidence_refs=None, mechanism="signal_quality"):
         return {
             "target": target,
+            "mechanism": mechanism,
             "principal_hypothesis": "A sign-preserving expression change improves the active target.",
             "mutation": {"type": "expression"},
             "success_criteria": [{"type": "metric", "name": target, "direction": "higher", "min_change": 0}],
@@ -103,7 +104,8 @@ class PlanningGuardTests(TestCase):
         }
 
     def _promote_current_plan(self, target="SHARPE", evidence="E1", child_id="CHILD", expression="rank(-close)"):
-        opened = self.store.open_hypothesis("H1", self._hypothesis_contract(target, [evidence]))
+        mechanism = (self.store.read().get("focus") or {}).get("mechanism") or "signal_quality"
+        opened = self.store.open_hypothesis("H1", self._hypothesis_contract(target, [evidence], mechanism=mechanism))
         self.assertTrue(opened["ok"], opened)
         candidate = {
             "parent_id": self.store.read()["incumbent"]["alpha_id"],
@@ -193,6 +195,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         contract = {
             "target": "SHARPE",
+            "mechanism": "signal_quality",
             "principal_hypothesis": "A sign-preserving expression change improves signal quality.",
             "mutation": {"type": "expression"},
             "success_criteria": [{"type": "metric", "name": "SHARPE", "direction": "higher", "min_change": 0}],
@@ -259,6 +262,7 @@ class PlanningGuardTests(TestCase):
             "H1",
             {
                 "target": "SHARPE",
+                "mechanism": "signal_quality",
                 "principal_hypothesis": "Test parent binding.",
                 "mutation": {"type": "expression"},
                 "success_criteria": [{"type": "metric", "name": "SHARPE", "direction": "higher"}],
@@ -494,6 +498,189 @@ class PlanningGuardTests(TestCase):
         )
         self.assertTrue(finished["ok"], finished)
 
+
+
+    def test_initial_empty_plan_can_reach_exhaustion_without_fabricated_route(self):
+        empty = self.store.set_plan({"routes": []})
+        self.assertTrue(empty["ok"], empty)
+        self.assertEqual(empty["plan"]["status"], "EXHAUSTED")
+        self.assertEqual(empty["plan"]["routes"], [])
+        blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No justified normal route exists.")
+        self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
+        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        self.assertTrue(final_replan["ok"], final_replan)
+        finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
+        self.assertTrue(finished["ok"], finished)
+
+    def test_hypothesis_mechanism_must_match_active_route(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")
+            )
+        )
+        self._open_focus()
+        rejected = self.store.open_hypothesis(
+            "H_BAD_MECH",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="tail_robustness"),
+        )
+        self.assertEqual(rejected["reason"], "HYPOTHESIS_MECHANISM_MISMATCH")
+        accepted = self.store.open_hypothesis(
+            "H_GOOD_MECH",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="signal_quality"),
+        )
+        self.assertTrue(accepted["ok"], accepted)
+
+    def test_route_reopen_history_is_scoped_to_incumbent_cycle(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "First route."),
+                ("R2", "SHARPE", "optimization/sharpe.md", "signal_quality_confirmation", ["E1"], "Second route."),
+            )
+        )
+        closed = self.store.close_route("R1", "COMPLETED", "R1 completed for the old incumbent.")
+        self.assertTrue(closed["ok"], closed)
+        self._open_focus(route_id="R2")
+        self._promote_current_plan(child_id="CHILD_HISTORY")
+
+        fresh = self.store.set_plan(
+            self._plan(
+                ("R3", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "The new incumbent may revisit this mechanism.")
+            )
+        )
+        self.assertTrue(fresh["ok"], fresh)
+        self.assertEqual(fresh["plan"]["incumbent_alpha_id"], "CHILD_HISTORY")
+
+    def test_legacy_state_requires_plan_before_new_focus_or_hypothesis(self):
+        legacy = self.store.read()
+        legacy.pop("planning_contract", None)
+        legacy.pop("optimization_plan", None)
+        legacy.pop("optimization_plan_history", None)
+        self.store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        self.assertEqual(self.store.read()["planning_contract"], "legacy")
+
+        focus = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            blocker="LOW_SHARPE",
+            route_id="R1",
+        )
+        self.assertEqual(focus["reason"], "LEGACY_PLAN_REQUIRED")
+
+        # A legacy state with an already-open historical focus may still close it,
+        # but it cannot open a new hypothesis until it installs a v1 plan.
+        legacy = self.store.read()
+        legacy["focus"] = {
+            "type": "DEFECT",
+            "owner": "optimization/sharpe.md",
+            "target": "SHARPE",
+            "blocker": "LOW_SHARPE",
+            "status": "OPEN",
+            "evidence_refs": ["E1"],
+            "revision": 1,
+        }
+        self.store.path.write_text(json.dumps(legacy), encoding="utf-8")
+        hyp = self.store.open_hypothesis("H_LEGACY", self._hypothesis_contract())
+        self.assertEqual(hyp["reason"], "LEGACY_PLAN_REQUIRED")
+        exhausted = self.store.exhaust_focus("Close the historical focus before migration.")
+        self.assertTrue(exhausted["ok"], exhausted)
+
+
+    def test_next_route_same_target_owner_but_different_mechanism_can_open_with_preexisting_evidence(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "First mechanism."),
+                ("R2", "SHARPE", "optimization/sharpe.md", "exposure_control", ["E2"], "Second mechanism."),
+            )
+        )
+        self._open_focus(route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE")
+        exhausted = self.store.exhaust_focus("The signal-quality mechanism is exhausted.")
+        self.assertEqual(exhausted["next_route"]["id"], "R2")
+
+        opened = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E2"],
+            blocker="LOW_SHARPE",
+            route_id="R2",
+        )
+        self.assertTrue(opened["ok"], opened)
+        self.assertEqual(opened["focus"]["mechanism"], "exposure_control")
+
+    def test_reopened_route_focus_must_use_reopen_observation(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Initial route.")
+            )
+        )
+        self._open_focus()
+        self.store.exhaust_focus("Initial route exhausted.")
+        self.assertTrue(
+            self.store.register_evidence(
+                {
+                    "id": "E_NOVEL_FOCUS",
+                    "kind": "DIAGNOSTIC",
+                    "subject": "TAIL",
+                    "source": "BRAIN:get_record_set_data",
+                    "observed_at": "2026-09-21T00:03:00Z",
+                    "claim": "A genuinely new tail observation changes the signal-quality question.",
+                }
+            )["ok"]
+        )
+        plan = self._plan(
+            ("R1B", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1", "E_NOVEL_FOCUS"], "Novel evidence justifies reopening.")
+        )
+        plan["routes"][0]["reopen_reason"] = "A new tail observation appeared after exhaustion."
+        plan["routes"][0]["new_observation_refs"] = ["E_NOVEL_FOCUS"]
+        plan["based_on_evidence_revision"] = self.store.read()["evidence_revision"]
+        reopened = self.store.set_plan(plan, final_replan=True)
+        self.assertTrue(reopened["ok"], reopened)
+
+        old_only = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            blocker="LOW_SHARPE",
+            route_id="R1B",
+        )
+        self.assertEqual(old_only["reason"], "ROUTE_REOPEN_OBSERVATION_MISMATCH")
+
+        grounded = self.store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1", "E_NOVEL_FOCUS"],
+            blocker="LOW_SHARPE",
+            route_id="R1B",
+        )
+        self.assertTrue(grounded["ok"], grounded)
+
+
+    def test_pre_v33_v1_focus_derives_mechanism_from_bound_route(self):
+        planned = self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal route.")
+            )
+        )
+        self.assertTrue(planned["ok"], planned)
+        opened = self._open_focus()
+        state = self.store.read()
+        state["focus"].pop("mechanism", None)
+        for route in state["optimization_plan"]["routes"]:
+            route.pop("priority", None)
+        self.store.path.write_text(json.dumps(state), encoding="utf-8")
+
+        enriched = self.store.read()
+        self.assertEqual(enriched["focus"]["mechanism"], "signal_quality")
+        self.assertEqual(enriched["optimization_plan"]["routes"][0]["priority"], 1)
+        hyp = self.store.open_hypothesis(
+            "H_COMPAT",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="signal_quality"),
+        )
+        self.assertTrue(hyp["ok"], hyp)
 
 
 if __name__ == "__main__":

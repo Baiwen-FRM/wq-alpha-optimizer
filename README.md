@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.2.2
+# wq-alpha-optimizer v3.3.0
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -15,6 +15,23 @@ This README is an orientation map, not a second rulebook. Normative behavior liv
 - `references/runtime/anchors.md` — generic numeric anchors.
 - `references/runtime/report-templates.md` — human-readable log structure only.
 - `references/optimization/` — defect mechanisms and same-thesis repair families.
-- `scripts/optimizer_guard.py` — deterministic enforcement of the machine contract, including plan/route/run transitions, where locally verifiable.
+- `scripts/optimizer_guard.py` — deterministic enforcement of the machine contract, including current-result refresh, plan/route/focus/hypothesis/candidate/transport/result/promotion/readiness/terminal transitions, where locally verifiable.
 
 Release ZIP excludes runtime log contents/test scratch/`__MACOSX`/`.DS_Store`/pycache/pyc/temp backups. Run `python3 scripts/optimizer_guard.py --help` for the CLI.
+
+
+## v3.3 lifecycle
+
+The normal FE path is:
+
+```text
+Run start → Root snapshot → Diagnose/Profile → Ordered Plan
+→ one Active Route → Focus → Frozen Hypothesis → Candidate/Transport
+→ Result → Promotion or route closure
+→ fresh Incumbent Result/check refresh when needed
+→ re-profile/re-plan
+→ SUBMISSION_READY / SUCCESS / one-final-replan exhaustion
+   / USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE
+```
+
+An empty Profile/Plan is a valid result when no justified route exists; the controller must not invent a route merely to keep searching. GitHub CI runs the stdlib test suite and compile checks for every push/PR.

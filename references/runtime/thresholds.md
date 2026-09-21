@@ -21,8 +21,9 @@ Raw check evidence 保留 `source / observed_at / value / limit / status / respo
 
 `all_passed=true` 只说明该接口自己的聚合条件为真，不自动等于真实可提交；WARNING 也不能一律当 PASS 或一律当 BLOCK。
 
-- 如果当前 UI、项目规则或用户**在本任务中明确给出的提交约束**会让某 WARNING 阻止提交，则 Submission Ready 仍为 NO/unknown，直到该约束满足或用户明确修改。
-- 其它 WARNING 按当前平台语义和本任务明确约束分类；不要引入未定义的额外契约。
+- 如果当前 UI、项目规则或用户**在本任务中明确给出的提交约束**会让某 WARNING 阻止提交，则在 raw row 标 `policy_classified:true, policy_blocking:true`，Submission Ready 仍为 NO。
+- 若 WARNING 已根据当前平台/项目规则明确判定为 non-blocking，则标 `policy_classified:true, policy_blocking:false`。没有显式 classification 的 WARNING 对 `SUBMISSION_READY` 仍是 unresolved，不能靠默认 false 当 PASS。
+- `PENDING / UNKNOWN` 等非终态不是 PASS；终检前必须 fresh resolve。
 - ProdCorr/SelfCorr 的局部 `passes_check=true` 不能覆盖其它 submission-policy 证据。
 
 ## Threshold / headroom discipline
@@ -44,3 +45,8 @@ Fitness = Sharpe * sqrt(abs(Returns) / max(Turnover, 0.125))
 Sub-Universe、Robust Universe、Investability、IS Ladder、LOW_2Y、地区特殊 Sharpe 等可能随 user/region/delay/project 改变。只记录平台当前窗口、value、limit、status；不复制静态 cutoff/年份表。
 
 终检至少保留当前关键指标与 blocking checks 的 fresh evidence，并明确：Root、Research Best、Submission Ready、unknowns。Python Alpha 专属限制由 `wq-python-alpha` 维护。
+
+
+## Current-result refresh
+
+当当前 Incumbent 的 Result/check snapshot 比 state 中记录的新时，使用 guard 的 `refresh-incumbent` 更新 snapshot。refresh 只更新当前 Incumbent 的平台事实，不改变 expression/settings，也不替代 plan 所需的 evidence refs。若 normalized metrics/check facts 改变，旧 plan 进入 `STALE`，需要重新 Profile/Plan；若只是相同事实的新 timestamp/source，则只刷新 freshness，不触发 re-plan。
