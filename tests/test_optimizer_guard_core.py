@@ -422,5 +422,41 @@ class CoreGuardTests(TestCase):
         self.assertEqual(self.store.read()["optimization_plan"]["status"], "ACTIVE")
 
 
+    def test_pre_v33_check_rows_keep_initialize_idempotent(self):
+        state = self.store.read()
+        for snapshot_key in ("root_baseline", "incumbent"):
+            for row in state[snapshot_key]["result_evidence"]["checks"]:
+                row.pop("policy_classified", None)
+        self.store.path.write_text(__import__("json").dumps(state), encoding="utf-8")
+
+        again = self.store.initialize(
+            {
+                "alpha_id": "ROOT",
+                "expression": "rank(close)",
+                "fields": ["close"],
+                "settings": {
+                    "language": "FASTEXPR",
+                    "region": "GBR",
+                    "delay": 0,
+                    "universe": "TOP700",
+                    "instrumentType": "EQUITY",
+                    "decay": 5,
+                    "truncation": 0.08,
+                },
+                "language": "FASTEXPR",
+                "result_evidence": {
+                    "metrics": {"SHARPE": 2.0, "FITNESS": 1.5, "TURNOVER": 0.2},
+                    "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+                    "observed_at": "2026-09-21T00:00:00Z",
+                    "source": "BRAIN:test",
+                    "response_complete": True,
+                    "authenticated": True,
+                },
+            }
+        )
+        self.assertTrue(again["initialized"], again)
+        self.assertTrue(again["already_initialized"], again)
+
+
 if __name__ == "__main__":
     main()
