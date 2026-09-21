@@ -402,5 +402,25 @@ class CoreGuardTests(TestCase):
         self.assertTrue(finished["ok"], finished)
 
 
+    def test_refresh_same_facts_new_timestamp_does_not_stale_plan(self):
+        planned = self._set_plan()
+        self.assertTrue(planned["ok"], planned)
+        refreshed = self.store.refresh_incumbent_result(
+            {
+                "alpha_id": "ROOT",
+                "metrics": {"SHARPE": 2.0, "FITNESS": 1.5, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+                "observed_at": "2026-09-21T00:05:00Z",
+                "source": "BRAIN:get_submission_check",
+                "response_complete": True,
+                "authenticated": True,
+            }
+        )
+        self.assertTrue(refreshed["ok"], refreshed)
+        self.assertFalse(refreshed["facts_changed"], refreshed)
+        self.assertEqual(refreshed["plan_status"], "ACTIVE")
+        self.assertEqual(self.store.read()["optimization_plan"]["status"], "ACTIVE")
+
+
 if __name__ == "__main__":
     main()
