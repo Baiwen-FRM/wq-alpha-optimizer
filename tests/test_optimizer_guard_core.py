@@ -543,5 +543,13 @@ class CoreGuardTests(TestCase):
         self.assertIn("NEW_PROJECT_WARNING", result["evaluation"]["new_unresolved_checks"])
 
 
+    def test_normal_completion_requires_initialized_state_but_forced_stop_does_not(self):
+        raw_store = guard.StateStore(Path(self.tempdir.name) / "uninitialized.json", "RAW")
+        success = raw_store.finish_run("SUCCESS", "Cannot succeed before Root initialization.")
+        self.assertEqual(success["reason"], "STATE_NOT_INITIALIZED")
+        forced = raw_store.finish_run("PLATFORM_UNRECOVERABLE", "Platform failed before Root intake completed.")
+        self.assertTrue(forced["ok"], forced)
+
+
 if __name__ == "__main__":
     main()
