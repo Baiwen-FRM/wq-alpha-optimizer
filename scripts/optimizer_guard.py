@@ -845,6 +845,32 @@ class StateStore:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v1"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
+
+        # Read-time compatibility enrichment for pre-v3.3 v1 states. These
+        # fields are derivable from existing plan order/binding and do not
+        # rewrite economic or result facts.
+        plan = state.get("optimization_plan")
+        if state.get("planning_contract") == "v1" and isinstance(plan, dict):
+            routes = plan.get("routes", [])
+            for priority, route in enumerate(routes, start=1):
+                route.setdefault("priority", priority)
+            focus = state.get("focus")
+            if isinstance(focus, dict) and not focus.get("mechanism"):
+                route = None
+                if focus.get("route_id"):
+                    route = next((item for item in routes if item.get("id") == focus.get("route_id")), None)
+                if route is None:
+                    matching = [
+                        item for item in routes
+                        if item.get("status") == "ACTIVE"
+                        and item.get("owner") == focus.get("owner")
+                        and item.get("target") == focus.get("target")
+                    ]
+                    if len(matching) == 1:
+                        route = matching[0]
+                if route and route.get("mechanism"):
+                    focus["mechanism"] = route.get("mechanism")
+                    state["focus"] = focus
         return state
 
     def _ensure_run_log(self, state: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
