@@ -297,11 +297,16 @@ def _normalize_checks(checks: Any) -> list[Dict[str, Any]]:
     if not isinstance(checks, list):
         raise ValueError("checks must be a list")
     out = []
+    seen_names = set()
     for item in checks:
         if not isinstance(item, dict) or not _nonempty(item.get("name")) or not _nonempty(item.get("status")):
             raise ValueError("each check needs name/status")
         row = dict(item)
-        row["name"] = str(row["name"])
+        check_name = str(row["name"])
+        if check_name in seen_names:
+            raise ValueError(f"duplicate check name: {check_name}")
+        seen_names.add(check_name)
+        row["name"] = check_name
         row["status"] = str(row["status"]).upper()
         # FAIL is always blocking. WARNING needs an explicit project/platform
         # classification before it can support SUBMISSION_READY. A blocking
@@ -785,6 +790,11 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         passed = a >= b - tol if p["rule"] == "not_lower" else a <= b + tol
         protected_results.append({"policy": p, "before": b, "after": a, "passed": passed})
 
+    before_check_names = {str(row["name"]) for row in before_checks}
+    after_check_names = {str(row["name"]) for row in after_checks}
+    missing_prior_checks = before_check_names - after_check_names
+    missing.extend(f"check:{name}" for name in sorted(missing_prior_checks))
+
     old_blockers = _fail_blockers(before_checks)
     new_blockers = _fail_blockers(after_checks) - old_blockers
     old_unresolved = _unresolved_checks(before_checks)
@@ -807,6 +817,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         "old_unresolved_checks": sorted(old_unresolved),
         "candidate_unresolved_checks": sorted(candidate_unresolved),
         "new_unresolved_checks": sorted(new_unresolved),
+        "missing_prior_checks": sorted(missing_prior_checks),
     }
 
 
@@ -1027,6 +1038,17 @@ class StateStore:
                     "current_observed_at": previous_observed,
                 }
 
+        previous_checks = _normalize_checks(previous.get("checks")) if previous else []
+        previous_check_names = {str(row["name"]) for row in previous_checks}
+        current_check_names = {str(row["name"]) for row in checks}
+        missing_prior_checks = sorted(previous_check_names - current_check_names)
+        if missing_prior_checks:
+            return {
+                "ok": False,
+                "reason": "RESULT_REFRESH_CHECK_SET_INCOMPLETE",
+                "missing_checks": missing_prior_checks,
+            }
+
         snapshot = {
             "metrics": metrics,
             "checks": checks,
@@ -1036,8 +1058,18 @@ class StateStore:
             "authenticated": True,
         }
         if previous_observed and observed == _parse_iso(previous_observed):
-            if _canonical_json(previous) == _canonical_json(snapshot):
-                return {"ok": True, "already_current": True, "readiness": _submission_readiness(state)}
+            if _result_fact_fingerprint(previous) == _result_fact_fingerprint(snapshot):
+                incumbent["result_evidence"] = snapshot
+                state["incumbent"] = incumbent
+                self._write(state)
+                return {
+                    "ok": True,
+                    "already_current": True,
+                    "facts_changed": False,
+                    "incumbent_alpha_id": incumbent.get("alpha_id"),
+                    "readiness": _submission_readiness(state),
+                    "plan_status": (state.get("optimization_plan") or {}).get("status"),
+                }
             return {"ok": False, "reason": "RESULT_REFRESH_TIMESTAMP_CONFLICT"}
 
         facts_changed = _result_fact_fingerprint(previous) != _result_fact_fingerprint(snapshot)
