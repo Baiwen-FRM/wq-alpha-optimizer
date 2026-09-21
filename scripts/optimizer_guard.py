@@ -1056,11 +1056,12 @@ class StateStore:
         raw_routes = plan.get("routes", [])
         if not isinstance(raw_routes, list):
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
-        # The initial Root profile or a newly promoted Incumbent may legitimately
-        # have no justified normal route. Install an empty EXHAUSTED plan so the
-        # mandatory one-time final re-plan can run without fabricating a route.
-        allow_empty_fresh_cycle = current is None or new_incumbent_cycle
-        if not raw_routes and not final_replan and not allow_empty_fresh_cycle:
+        # The initial Root profile or any legitimate STALE re-profile may
+        # find no justified normal route. Install an empty EXHAUSTED plan rather
+        # than fabricating a route. A new Incumbent resets final-replan usage;
+        # a same-Incumbent refresh preserves that cycle's existing allowance.
+        allow_empty_fresh_profile = current is None or (current or {}).get("status") == "STALE"
+        if not raw_routes and not final_replan and not allow_empty_fresh_profile:
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
         try:
             based_on_evidence_revision = int(plan.get("based_on_evidence_revision", state.get("evidence_revision", 0)))
