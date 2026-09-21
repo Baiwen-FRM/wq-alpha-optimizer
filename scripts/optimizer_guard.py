@@ -18,6 +18,7 @@ machine-auditable and internally consistent.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -839,6 +840,7 @@ class StateStore:
     def _initial_state(self) -> Dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
+            "_state_revision": 0,
             "root_alpha_id": self.root_alpha_id,
             "planning_contract": "v1",
             "root_baseline": None,
@@ -861,6 +863,7 @@ class StateStore:
         if not self.path.exists():
             return self._initial_state()
         state = json.loads(self.path.read_text(encoding="utf-8"))
+        state.setdefault("_state_revision", 0)
         if "planning_contract" not in state:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v1"
         state.setdefault("optimization_plan", None)
@@ -957,15 +960,51 @@ class StateStore:
         return {"ok": True, "log_path": str(log_path), "log_created_or_recreated": created, "entry_count": len(state["log_entries"])}
 
     def _write(self, state: Dict[str, Any]) -> None:
+        """Atomic compare-and-swap write.
+
+        The optimizer may be invoked by multiple controller/tool calls in one
+        run. A plain atomic replace prevents torn JSON but does not prevent a
+        stale reader from silently overwriting a newer decision. Serialize the
+        replace with a file lock and reject stale snapshots instead.
+        """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=str(self.path.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(state, fh, ensure_ascii=False, sort_keys=True, indent=2)
-                fh.flush(); os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        finally:
-            if os.path.exists(tmp): os.unlink(tmp)
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        lock_path.touch(exist_ok=True)
+        expected_revision = int(state.get("_state_revision", 0))
+
+        with lock_path.open("r+") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            try:
+                current_revision = 0
+                if self.path.exists():
+                    current = json.loads(self.path.read_text(encoding="utf-8"))
+                    current_revision = int(current.get("_state_revision", 0))
+                if current_revision != expected_revision:
+                    raise ValueError(
+                        "STATE_WRITE_CONFLICT: state changed after read; "
+                        f"expected revision {expected_revision}, found {current_revision}. "
+                        "Re-read state and retry the intended transition serially."
+                    )
+
+                next_state = _copy_json(state)
+                next_state["_state_revision"] = expected_revision + 1
+                fd, tmp = tempfile.mkstemp(
+                    prefix=self.path.name + ".",
+                    suffix=".tmp",
+                    dir=str(self.path.parent),
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        json.dump(next_state, fh, ensure_ascii=False, sort_keys=True, indent=2)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.replace(tmp, self.path)
+                    state["_state_revision"] = expected_revision + 1
+                finally:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+            finally:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
     def initialize(self, baseline: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = _snapshot_from_json(baseline, self.root_alpha_id)
