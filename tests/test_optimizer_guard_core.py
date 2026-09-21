@@ -458,5 +458,62 @@ class CoreGuardTests(TestCase):
         self.assertTrue(again["already_initialized"], again)
 
 
+    def test_enhancement_requires_resolved_current_checks(self):
+        unresolved_store = guard.StateStore(Path(self.tempdir.name) / "enh-unresolved.json", "ENH1")
+        self._initialize(
+            unresolved_store,
+            checks=[{"name": "PROJECT_WARNING", "status": "WARNING"}],
+        )
+        self._register(
+            unresolved_store,
+            "E1",
+            "DIAGNOSTIC",
+            "ENHANCEMENT",
+            "BRAIN:test",
+            "A same-thesis enhancement opportunity is supported by current diagnostics.",
+        )
+        plan = self._set_plan(unresolved_store)
+        self.assertTrue(plan["ok"], plan)
+        blocked = unresolved_store.set_focus(
+            "ENHANCEMENT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            route_id="R1",
+        )
+        self.assertEqual(blocked["reason"], "ENHANCEMENT_REQUIRES_RESOLVED_CHECKS")
+
+        classified_store = guard.StateStore(Path(self.tempdir.name) / "enh-classified.json", "ENH2")
+        self._initialize(
+            classified_store,
+            checks=[
+                {
+                    "name": "PROJECT_WARNING",
+                    "status": "WARNING",
+                    "policy_classified": True,
+                    "policy_blocking": False,
+                }
+            ],
+        )
+        self._register(
+            classified_store,
+            "E1",
+            "DIAGNOSTIC",
+            "ENHANCEMENT",
+            "BRAIN:test",
+            "A same-thesis enhancement opportunity is supported by current diagnostics.",
+        )
+        plan2 = self._set_plan(classified_store)
+        self.assertTrue(plan2["ok"], plan2)
+        opened = classified_store.set_focus(
+            "ENHANCEMENT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            route_id="R1",
+        )
+        self.assertTrue(opened["ok"], opened)
+
+
 if __name__ == "__main__":
     main()
