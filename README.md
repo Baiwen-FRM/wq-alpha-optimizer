@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.3.0
+# wq-alpha-optimizer v3.3.1
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -35,3 +35,11 @@ Run start → Root snapshot → Diagnose/Profile → Ordered Plan
 ```
 
 An empty Profile/Plan is a valid result when no justified route exists; the controller must not invent a route merely to keep searching. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
+
+
+## v3.3.1 real-run hardening
+
+- stale/concurrent Guard state writes are rejected instead of silently overwriting newer evidence;
+- planned routes must already be actionable, rather than placeholders for possible future diagnostics;
+- zero-hypothesis route exhaustion requires a newly observed reason that removed actionability;
+- conflicting PENDING/UNKNOWN submission evidence gets one bounded reconciliation attempt and otherwise remains unresolved.

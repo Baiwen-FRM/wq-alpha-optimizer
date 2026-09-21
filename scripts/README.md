@@ -24,3 +24,6 @@ Incumbent check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
 `PLATFORM_UNRECOVERABLE` are explicit terminal freeze states.
 
 Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经济因果或远端 source authenticity；这些必须来自当前认证平台 evidence 与 Primary defect reference。
+
+
+State mutation is single-writer. Concurrent/stale state snapshots are rejected with `STATE_WRITE_CONFLICT`; re-read the state and retry serially. This prevents evidence loss from overlapping Guard commands.

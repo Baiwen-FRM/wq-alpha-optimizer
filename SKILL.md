@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.3.0
+  version: 3.3.1
 ---
 
 # WQ Alpha Optimizer
