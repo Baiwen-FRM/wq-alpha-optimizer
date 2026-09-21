@@ -462,5 +462,39 @@ class PlanningGuardTests(TestCase):
         self.assertEqual(rejected["reason"], "PLAN_EVIDENCE_REVISION_MISMATCH")
 
 
+    def test_new_incumbent_can_install_empty_plan_then_final_replan(self):
+        self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")
+            )
+        )
+        self._open_focus()
+        self._promote_current_plan(child_id="CHILD_EMPTY_PLAN")
+
+        fresh = self.store.set_plan({"routes": []})
+        self.assertTrue(fresh["ok"], fresh)
+        self.assertEqual(fresh["plan"]["status"], "EXHAUSTED")
+        self.assertEqual(fresh["plan"]["incumbent_alpha_id"], "CHILD_EMPTY_PLAN")
+        self.assertFalse(fresh["plan"]["final_replan_used"])
+        self.assertEqual(fresh["plan"]["routes"], [])
+
+        blocked = self.store.finish_run(
+            "COMPLETED_WITH_EXHAUSTION",
+            "The fresh incumbent has no justified normal route.",
+        )
+        self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
+
+        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        self.assertTrue(final_replan["ok"], final_replan)
+        self.assertTrue(final_replan["plan"]["final_replan_used"])
+
+        finished = self.store.finish_run(
+            "COMPLETED_WITH_EXHAUSTION",
+            "The mandatory final re-plan also found no justified route.",
+        )
+        self.assertTrue(finished["ok"], finished)
+
+
+
 if __name__ == "__main__":
     main()
