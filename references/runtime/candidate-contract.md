@@ -191,7 +191,7 @@ Guard 必须验证：
 - response complete + authenticated；
 - success criteria 是否成立；
 - protected metrics 是否满足预声明 policy；
-- candidate 是否引入新的 blocking check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。
+- candidate 是否引入新的 blocking check 或新的 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。若 candidate 新引入未分类 WARNING、PENDING/UNKNOWN 等 unresolved check，即使 metric criterion 已改善，也先记为 `INCONCLUSIVE`，不得 promotion，直到该 check 的当前语义被明确 resolve。
 
 `SUBMISSION_READY` 的要求更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；`PENDING/UNKNOWN` 等非终态也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。普通 `SUCCESS` 只表示 controller 判定用户目标已达到，不自动声称可提交。
 
