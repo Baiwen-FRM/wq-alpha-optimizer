@@ -555,5 +555,26 @@ class CoreGuardTests(TestCase):
         self.assertTrue(forced["ok"], forced)
 
 
+    def test_stale_concurrent_state_write_is_rejected_without_data_loss(self):
+        first = self.store.read()
+        stale = self.store.read()
+
+        first.setdefault("log_entries", []).append(
+            {"section": "A", "text": "first writer", "at": guard._now_iso()}
+        )
+        self.store._write(first)
+
+        stale.setdefault("log_entries", []).append(
+            {"section": "B", "text": "stale writer", "at": guard._now_iso()}
+        )
+        with self.assertRaisesRegex(ValueError, "STATE_WRITE_CONFLICT"):
+            self.store._write(stale)
+
+        current = self.store.read()
+        texts = [entry.get("text") for entry in current.get("log_entries", [])]
+        self.assertIn("first writer", texts)
+        self.assertNotIn("stale writer", texts)
+
+
 if __name__ == "__main__":
     main()
