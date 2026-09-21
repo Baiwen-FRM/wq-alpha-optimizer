@@ -150,7 +150,10 @@ class CoreGuardTests(TestCase):
             {
                 "alpha_id": "ROOT",
                 "metrics": {"SHARPE": 2.0, "FITNESS": 1.5},
-                "checks": [{"name": "PROJECT_WARNING", "status": "WARNING"}],
+                "checks": [
+                    {"name": "LOW_SHARPE", "status": "PASS"},
+                    {"name": "PROJECT_WARNING", "status": "WARNING"},
+                ],
                 "observed_at": "2026-09-21T00:05:00Z",
                 "source": "BRAIN:get_submission_check",
                 "response_complete": True,
@@ -165,12 +168,13 @@ class CoreGuardTests(TestCase):
                 "alpha_id": "ROOT",
                 "metrics": {"SHARPE": 2.0, "FITNESS": 1.5},
                 "checks": [
+                    {"name": "LOW_SHARPE", "status": "PASS"},
                     {
                         "name": "PROJECT_WARNING",
                         "status": "WARNING",
                         "policy_classified": True,
                         "policy_blocking": False,
-                    }
+                    },
                 ],
                 "observed_at": "2026-09-21T00:06:00Z",
                 "source": "BRAIN:get_submission_check",
