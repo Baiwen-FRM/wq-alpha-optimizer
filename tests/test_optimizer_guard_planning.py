@@ -659,5 +659,29 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(grounded["ok"], grounded)
 
 
+    def test_pre_v33_v1_focus_derives_mechanism_from_bound_route(self):
+        planned = self.store.set_plan(
+            self._plan(
+                ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal route.")
+            )
+        )
+        self.assertTrue(planned["ok"], planned)
+        opened = self._open_focus()
+        state = self.store.read()
+        state["focus"].pop("mechanism", None)
+        for route in state["optimization_plan"]["routes"]:
+            route.pop("priority", None)
+        self.store.path.write_text(json.dumps(state), encoding="utf-8")
+
+        enriched = self.store.read()
+        self.assertEqual(enriched["focus"]["mechanism"], "signal_quality")
+        self.assertEqual(enriched["optimization_plan"]["routes"][0]["priority"], 1)
+        hyp = self.store.open_hypothesis(
+            "H_COMPAT",
+            self._hypothesis_contract("SHARPE", ["E1"], mechanism="signal_quality"),
+        )
+        self.assertTrue(hyp["ok"], hyp)
+
+
 if __name__ == "__main__":
     main()
