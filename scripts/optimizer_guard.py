@@ -331,6 +331,18 @@ def _fail_blockers(checks: list[Dict[str, Any]]) -> set[str]:
     return {str(c["name"]) for c in checks if bool(c.get("blocking")) or str(c.get("status", "")).upper() == "FAIL"}
 
 
+def _unresolved_checks(checks: list[Dict[str, Any]]) -> set[str]:
+    unresolved = set()
+    for row in checks:
+        status = str(row.get("status", "")).upper()
+        if status == "PASS" or row.get("blocking"):
+            continue
+        if status == "WARNING" and row.get("policy_classified"):
+            continue
+        unresolved.add(str(row.get("name")))
+    return unresolved
+
+
 def _snapshot_from_json(baseline: Dict[str, Any], root_alpha_id: str) -> Dict[str, Any]:
     required = ("alpha_id", "expression", "fields", "settings", "language")
     missing = [k for k in required if not _nonempty(baseline.get(k))]
@@ -450,21 +462,12 @@ def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
         return {"ready": False, "reason": "READINESS_CHECKS_REQUIRED", "blockers": [], "unresolved_checks": []}
 
     blockers = sorted(_fail_blockers(checks))
-    unresolved = []
-    for row in checks:
-        status = str(row.get("status", "")).upper()
-        if status == "PASS":
-            continue
-        if row.get("blocking"):
-            continue
-        if status == "WARNING" and row.get("policy_classified"):
-            continue
-        unresolved.append(str(row.get("name")))
+    unresolved = sorted(_unresolved_checks(checks))
 
     if blockers:
-        return {"ready": False, "reason": "CURRENT_BLOCKERS_REMAIN", "blockers": blockers, "unresolved_checks": sorted(unresolved)}
+        return {"ready": False, "reason": "CURRENT_BLOCKERS_REMAIN", "blockers": blockers, "unresolved_checks": unresolved}
     if unresolved:
-        return {"ready": False, "reason": "READINESS_CHECKS_UNRESOLVED", "blockers": [], "unresolved_checks": sorted(unresolved)}
+        return {"ready": False, "reason": "READINESS_CHECKS_UNRESOLVED", "blockers": [], "unresolved_checks": unresolved}
     return {
         "ready": True,
         "reason": None,
@@ -784,7 +787,10 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
 
     old_blockers = _fail_blockers(before_checks)
     new_blockers = _fail_blockers(after_checks) - old_blockers
-    if missing:
+    old_unresolved = _unresolved_checks(before_checks)
+    candidate_unresolved = _unresolved_checks(after_checks)
+    new_unresolved = candidate_unresolved - old_unresolved
+    if missing or new_unresolved:
         status = "INCONCLUSIVE"
     elif criterion_results and all(x["passed"] for x in criterion_results) and all(x["passed"] for x in protected_results) and not new_blockers:
         status = "SUPPORTED"
@@ -798,6 +804,9 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         "old_blockers": sorted(old_blockers),
         "candidate_blockers": sorted(_fail_blockers(after_checks)),
         "new_blockers": sorted(new_blockers),
+        "old_unresolved_checks": sorted(old_unresolved),
+        "candidate_unresolved_checks": sorted(candidate_unresolved),
+        "new_unresolved_checks": sorted(new_unresolved),
     }
 
 
