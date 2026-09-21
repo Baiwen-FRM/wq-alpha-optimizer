@@ -391,6 +391,37 @@ def _validate_evidence_record(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _evidence_fingerprint(record: Dict[str, Any]) -> str:
+    """Fingerprint informational content, excluding audit identity/time fields."""
+    content = {
+        "kind": str(record.get("kind", "")).strip().upper(),
+        "subject": str(record.get("subject", "")).strip(),
+        "source": str(record.get("source", "")).strip(),
+        "claim": " ".join(str(record.get("claim", "")).split()),
+    }
+    return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
+
+
+def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
+    status = (state.get("run") or {}).get("status")
+    if status in RUN_TERMINAL_STATUSES:
+        return {"ok": False, "reason": "RUN_ALREADY_TERMINAL", "status": status}
+    return None
+
+
+def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
+    if state.get("planning_contract") != "v1":
+        return None
+    plan = state.get("optimization_plan")
+    if not plan:
+        return {"ok": False, "reason": "PLAN_REQUIRED"}
+    status = plan.get("status")
+    if status != "ACTIVE":
+        reason = "PLAN_STALE_REPLAN_REQUIRED" if status == "STALE" else "PLAN_NOT_ACTIVE"
+        return {"ok": False, "reason": reason, "plan_status": status}
+    return None
+
+
 def _normalize_plan_route(route: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(route, dict):
         raise ValueError("plan route must be an object")
@@ -476,7 +507,7 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("evidence_refs must be a non-empty string list")
 
     out = {
-        "target": str(contract["target"]),
+        "target": str(contract["target"]).strip(),
         "principal_hypothesis": str(contract["principal_hypothesis"]).strip(),
         "mutation": mutation,
         "success_criteria": normalized_criteria,
@@ -549,6 +580,9 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
 
     root = state.get("root_baseline")
     incumbent = state.get("incumbent")
+    planning_rejection = _active_plan_rejection(state)
+    if planning_rejection:
+        return {"valid": False, "reject_code": planning_rejection["reason"]}
     focus = state.get("focus")
     if not root or not incumbent:
         return {"valid": False, "reject_code": "STATE_NOT_INITIALIZED"}
@@ -824,10 +858,15 @@ class StateStore:
         except ValueError as exc:
             return {"ok": False, "reason": "EVIDENCE_CONTRACT", "detail": str(exc)}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         eid = normalized["id"]
+        normalized["content_fingerprint"] = _evidence_fingerprint(normalized)
         old = state["evidence"].get(eid)
         if old:
-            if _canonical_json(old) == _canonical_json(normalized):
+            content_keys = ("kind", "subject", "source", "observed_at", "claim")
+            if _canonical_json({key: old.get(key) for key in content_keys}) == _canonical_json({key: normalized.get(key) for key in content_keys}):
                 return {"ok": True, "already_registered": True, "id": eid, "revision": state["evidence_revision"]}
             return {"ok": False, "reason": "EVIDENCE_ID_ALREADY_USED"}
         state["evidence_revision"] = int(state.get("evidence_revision", 0)) + 1
@@ -840,6 +879,9 @@ class StateStore:
         if not isinstance(plan, dict):
             return {"ok": False, "reason": "PLAN_CONTRACT"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         current = state.get("optimization_plan")
         if (state.get("focus") or {}).get("status") == "OPEN":
             return {"ok": False, "reason": "PLAN_REQUIRES_CLOSED_FOCUS"}
@@ -893,6 +935,9 @@ class StateStore:
             missing_observations = [ref for ref in observation_refs if ref not in state.get("evidence", {})]
             if missing_observations:
                 return {"ok": False, "reason": "UNKNOWN_NEW_OBSERVATION_REF", "missing": missing_observations, "route_id": route["id"]}
+            for ref in [*route["evidence_refs"], *observation_refs]:
+                if int(state["evidence"][ref].get("revision", 0)) > based_on_evidence_revision:
+                    return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_MISMATCH", "route_id": route["id"], "evidence_ref": ref}
             routes.append(route)
 
         active = [route for route in routes if route["status"] == "ACTIVE"]
@@ -916,20 +961,33 @@ class StateStore:
             if not observation_refs:
                 return {"ok": False, "reason": "ROUTE_NEW_OBSERVATION_REQUIRED", "route_id": route["id"]}
             closed_revision = max(int(old.get("closed_at_evidence_revision", 0)) for old in previous)
-            if not any(int(state["evidence"][ref].get("revision", 0)) > closed_revision for ref in observation_refs):
-                return {"ok": False, "reason": "ROUTE_NEW_OBSERVATION_REQUIRED", "route_id": route["id"]}
+            available_fingerprints = {
+                evidence.get("content_fingerprint") or _evidence_fingerprint(evidence)
+                for evidence in state.get("evidence", {}).values()
+                if int(evidence.get("revision", 0)) <= closed_revision
+            }
+            if not any(
+                int(state["evidence"][ref].get("revision", 0)) > closed_revision
+                and (state["evidence"][ref].get("content_fingerprint") or _evidence_fingerprint(state["evidence"][ref])) not in available_fingerprints
+                for ref in observation_refs
+            ):
+                return {"ok": False, "reason": "ROUTE_NEW_OBSERVATION_NOT_NOVEL", "route_id": route["id"]}
 
         if current:
             state.setdefault("optimization_plan_history", []).append(_copy_json(current))
         revision = int((current or {}).get("revision", 0)) + 1
+        current_incumbent_id = (current or {}).get("incumbent_alpha_id")
+        incumbent_id = (state.get("incumbent") or {}).get("alpha_id")
+        new_incumbent_cycle = bool(current and current_incumbent_id and incumbent_id and str(current_incumbent_id) != str(incumbent_id))
         normalized = {
             "revision": revision,
             "based_on_evidence_revision": based_on_evidence_revision,
-            "final_replan_used": bool(final_replan or (current or {}).get("final_replan_used", False)),
+            "final_replan_used": bool(final_replan or ((current or {}).get("final_replan_used", False) and not new_incumbent_cycle)),
             "status": "ACTIVE" if routes else "EXHAUSTED",
             "routes": routes,
-            "incumbent_alpha_id": (state.get("incumbent") or {}).get("alpha_id"),
+            "incumbent_alpha_id": incumbent_id,
         }
+        state["planning_contract"] = "v1"
         state["optimization_plan"] = normalized
         self._write(state)
         return {"ok": True, "plan": normalized}
@@ -938,6 +996,12 @@ class StateStore:
         if not route_id.strip():
             return {"ok": False, "reason": "ROUTE_ID_REQUIRED"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        planning_rejection = _active_plan_rejection(state)
+        if planning_rejection:
+            return planning_rejection
         plan = state.get("optimization_plan")
         if not plan:
             return {"ok": False, "reason": "PLAN_REQUIRED"}
@@ -964,6 +1028,12 @@ class StateStore:
         if status not in {"DISMISSED", "COMPLETED"} or not route_id.strip() or not reason.strip():
             return {"ok": False, "reason": "ROUTE_CLOSE_CONTRACT"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        planning_rejection = _active_plan_rejection(state)
+        if planning_rejection:
+            return planning_rejection
         plan = state.get("optimization_plan")
         if not plan:
             return {"ok": False, "reason": "PLAN_REQUIRED"}
@@ -994,11 +1064,17 @@ class StateStore:
         if focus_type not in FOCUS_TYPES or not owner.strip() or not target.strip() or not evidence_refs:
             return {"ok": False, "reason": "FOCUS_CONTRACT"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         missing = [x for x in evidence_refs if x not in state.get("evidence", {})]
         if missing:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing}
         plan = state.get("optimization_plan")
         if state.get("planning_contract") == "v1":
+            planning_rejection = _active_plan_rejection(state)
+            if planning_rejection:
+                return planning_rejection
             if not plan:
                 return {"ok": False, "reason": "PLAN_REQUIRED"}
             active_routes = [route for route in plan.get("routes", []) if route.get("status") == "ACTIVE"]
@@ -1066,6 +1142,12 @@ class StateStore:
         if not reason.strip():
             return {"ok": False, "reason": "EXHAUST_REASON_REQUIRED"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        planning_rejection = _active_plan_rejection(state)
+        if planning_rejection:
+            return planning_rejection
         focus = state.get("focus")
         if not focus or focus.get("status") != "OPEN":
             return {"ok": False, "reason": "NO_OPEN_FOCUS"}
@@ -1111,6 +1193,12 @@ class StateStore:
         except ValueError as exc:
             return {"ok": False, "reason": "HYPOTHESIS_CONTRACT", "detail": str(exc)}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        planning_rejection = _active_plan_rejection(state)
+        if planning_rejection:
+            return planning_rejection
         focus = state.get("focus")
         if not focus or focus.get("status") != "OPEN":
             return {"ok": False, "reason": "NO_OPEN_FOCUS"}
@@ -1119,6 +1207,8 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing_refs}
         if not (set(normalized["evidence_refs"]) & set(focus.get("evidence_refs", []))):
             return {"ok": False, "reason": "HYPOTHESIS_NOT_GROUNDED_IN_FOCUS_EVIDENCE"}
+        if state.get("planning_contract") == "v1" and normalized["target"] != focus.get("target"):
+            return {"ok": False, "reason": "HYPOTHESIS_TARGET_MISMATCH", "focus_target": focus.get("target"), "hypothesis_target": normalized["target"]}
         old = state["hypotheses"].get(hypothesis_id)
         if old:
             if old.get("status") == "OPEN" and _canonical_json(old.get("contract")) == _canonical_json(normalized):
@@ -1144,6 +1234,9 @@ class StateStore:
     def allow_field(self, field: str, evidence_ref: str) -> Dict[str, Any]:
         field = field.strip()
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         ev = state.get("evidence", {}).get(evidence_ref)
         if not field or not ev:
             return {"ok": False, "reason": "ALLOW_FIELD_EVIDENCE_REQUIRED"}
@@ -1157,6 +1250,9 @@ class StateStore:
 
     def reserve_simulation(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return {"allowed": False, "reason": terminal["reason"], "status": terminal["status"]}
         pre = preflight_candidate(candidate, state, require_open_hypothesis=True)
         if not pre["valid"]:
             return {"allowed": False, "reason": pre["reject_code"], "preflight": pre}
@@ -1197,6 +1293,9 @@ class StateStore:
 
     def record_transport(self, fingerprint: str, status: str, simulation_id: str | None = None) -> Dict[str, Any]:
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         rec = state["simulations"].get(fingerprint)
         if not rec:
             return {"ok": False, "reason": "UNKNOWN_FINGERPRINT"}
@@ -1229,6 +1328,9 @@ class StateStore:
         if not reason.strip():
             return {"ok": False, "reason": "RELEASE_REASON_REQUIRED"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         rec = state["simulations"].get(fingerprint)
         if not rec:
             return {"ok": False, "reason": "UNKNOWN_FINGERPRINT"}
@@ -1248,6 +1350,9 @@ class StateStore:
         if not hypothesis_id.strip() or not evidence_ref.strip() or not reason.strip():
             return {"ok": False, "reason": "ABANDON_CONTRACT_REQUIRED"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         focus = state.get("focus")
         if not focus or focus.get("status") != "OPEN":
             return {"ok": False, "reason": "NO_OPEN_FOCUS"}
@@ -1302,6 +1407,9 @@ class StateStore:
 
     def evaluate_result(self, candidate: Dict[str, Any], result_evidence: Dict[str, Any]) -> Dict[str, Any]:
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         pre = preflight_candidate(candidate, state, require_open_hypothesis=True)
         if not pre["valid"]:
             return {"ok": False, "reason": pre["reject_code"], "preflight": pre}
@@ -1354,6 +1462,9 @@ class StateStore:
 
     def promote(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return {"promoted": False, "reason": terminal["reason"], "status": terminal["status"]}
         pre = preflight_candidate(candidate, state, require_open_hypothesis=False)
         if not pre["valid"]:
             return {"promoted": False, "reason": pre["reject_code"], "preflight": pre}
@@ -1405,6 +1516,9 @@ class StateStore:
         if status not in RUN_TERMINAL_STATUSES or not reason.strip():
             return {"ok": False, "reason": "RUN_FINISH_CONTRACT"}
         state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
         state, _ = self._ensure_run_log(state)
         run = state["run"]
         plan = state.get("optimization_plan")
@@ -1419,7 +1533,7 @@ class StateStore:
                 return {"ok": False, "reason": "FINAL_REPLAN_REQUIRED"}
             if any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in plan.get("routes", [])):
                 return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
-        elif plan and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
+        elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
             return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
         run["finished_at"] = _now_iso()

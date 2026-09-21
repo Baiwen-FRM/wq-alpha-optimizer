@@ -26,6 +26,8 @@
 
 `source` 必须是可追溯的 namespace/action；`observed_at` 必须带 timezone。Evidence registry 的作用是留下 provenance，不代表 guard 能独立证明经济解释为真。
 
+Guard 会按 `kind / subject / source / claim` 保存一个 informational content fingerprint，故意排除 evidence ID、revision 和 `observed_at`。换一个 ID 或只换时间戳的 exact informational duplicate 可以保留审计记录，但不能作为 exhausted route 的新 observation。fingerprint 只能拦截 exact normalized content；语义改写、同义 paraphrase 等“实质是否新颖”仍必须由 controller 判断，guard 不宣称能自动识别。
+
 新 field 必须使用：
 
 ```json
@@ -65,9 +67,11 @@ Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。它只承载 controller 根据�
 
 每条 route 必须引用已注册 evidence，并提供 mechanism-level rationale；只因为 operator catalog 存在某个 operator 不能建 route。一次最多一个 `ACTIVE` route，active focus 必须绑定该 route。`PENDING` route 不是 candidate，也不触发其 Primary reference 的加载。
 
-`EXHAUSTED` route 不能因为重复读取同一事实自动复活。若新 plan 要重开同一 `target/owner/mechanism`，必须提供 `reopen_reason` 和 exhaustion 之后的新 `new_observation_refs`；仅换 evidence ID 或 timestamp 不够。Promotion 改变 Incumbent 后，当前 plan 标记 `STALE`，不得继续机械执行。
+每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 plan snapshot 自相矛盾，guard 拒绝。`EXHAUSTED` route 不能因为重复读取同一事实自动复活。若新 plan 要重开同一 `target/owner/mechanism`，必须提供 `reopen_reason` 和 exhaustion 之后、且 fingerprint 实质新颖的 `new_observation_refs`；仅换 evidence ID 或 timestamp 不够。Promotion 改变 Incumbent 后，当前 plan 标记 `STALE`，旧 route/focus/hypothesis/candidate path 不得继续机械执行，必须为新 Incumbent 重新 Profile/Plan。
 
-当前 plan 的 routes 全部 terminal 后，controller 只能执行一次 `final-replan`。没有 OPEN hypothesis、OPEN focus、ACTIVE/PENDING route 且 final re-plan 为空时，guard 才允许 `COMPLETED_WITH_EXHAUSTION`；成功路径继续复用现有 `SUCCESS/SUBMISSION_READY` 语义。
+当前 plan 的 routes 全部 terminal 后，controller 只能执行一次 `final-replan`；同一 Incumbent cycle 不得继承已消耗的 final re-plan，新 Incumbent 会开启新的 cycle。没有 OPEN hypothesis、OPEN focus、ACTIVE/PENDING route 且 final re-plan 为空时，guard 才允许 `COMPLETED_WITH_EXHAUSTION`；`SUCCESS/SUBMISSION_READY` 在没有 OPEN hypothesis/focus 时可以结束已因 promotion 变成 `STALE` 的旧 plan。
+
+`run.status` 进入 `SUCCESS`、`SUBMISSION_READY` 或 `COMPLETED_WITH_EXHAUSTION` 后是 terminal boundary；所有 research-state mutation 都拒绝并返回 `RUN_ALREADY_TERMINAL`。`append_log` 只追加最终人工说明，不改变研究状态，因此仍可使用。
 
 ## 4. Focus
 
@@ -77,6 +81,8 @@ Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。它只承载 controller 根据�
 - `ENHANCEMENT`：仅在当前 Incumbent 没有 FAIL blocker、用户明确要求继续提升、且有 evidence-supported opportunity 时使用。
 
 `Evidence Exhausted` 会关闭当前 focus。重新开启同一 exhausted family 时，新的 focus 必须实际引用一条**在 exhaustion 之后注册**的新 evidence；仅注册无关 evidence 或继续引用旧 evidence 都不够。
+
+在 v1 planning contract 中，hypothesis 的 `target` 必须与当前 active focus/route 的 `target` 一致；不能绑定到一个 route 后跳去测试另一个 blocker。
 
 ## 5. Frozen hypothesis contract
 
