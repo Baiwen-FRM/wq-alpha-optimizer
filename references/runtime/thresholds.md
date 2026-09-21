@@ -49,4 +49,4 @@ Sub-Universe、Robust Universe、Investability、IS Ladder、LOW_2Y、地区特�
 
 ## Current-result refresh
 
-当当前 Incumbent 的 Result/check snapshot 比 state 中记录的新时，使用 guard 的 `refresh-incumbent` 更新 snapshot。refresh 只更新当前 Incumbent 的平台事实，不改变 expression/settings，也不替代 plan 所需的 evidence refs。若 refresh 改变事实，旧 plan 进入 `STALE`，需要重新 Profile/Plan。
+当当前 Incumbent 的 Result/check snapshot 比 state 中记录的新时，使用 guard 的 `refresh-incumbent` 更新 snapshot。refresh 只更新当前 Incumbent 的平台事实，不改变 expression/settings，也不替代 plan 所需的 evidence refs。若 normalized metrics/check facts 改变，旧 plan 进入 `STALE`，需要重新 Profile/Plan；若只是相同事实的新 timestamp/source，则只刷新 freshness，不触发 re-plan。
