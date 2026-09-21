@@ -67,7 +67,7 @@ Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。它只承载 controller 根据�
 
 每条 route 必须引用已注册 evidence，并提供 mechanism-level rationale；只因为 operator catalog 存在某个 operator 不能建 route。一次最多一个 `ACTIVE` route，active focus 必须绑定该 route。`PENDING` route 不是 candidate，也不触发其 Primary reference 的加载。
 
-每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 plan snapshot 自相矛盾，guard 拒绝。`EXHAUSTED` route 不能因为重复读取同一事实自动复活。若新 plan 要重开同一 `target/owner/mechanism`，必须提供 `reopen_reason` 和 exhaustion 之后、且 fingerprint 实质新颖的 `new_observation_refs`；仅换 evidence ID 或 timestamp 不够。Promotion 改变 Incumbent 后，当前 plan 标记 `STALE`，旧 route/focus/hypothesis/candidate path 不得继续机械执行，必须为新 Incumbent 重新 Profile/Plan。
+每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 plan snapshot 自相矛盾，guard 拒绝。`EXHAUSTED` route 不能因为重复读取同一事实自动复活。若新 plan 要重开同一 `target/owner/mechanism`，必须提供 `reopen_reason` 和 exhaustion 之后、且 fingerprint 实质新颖的 `new_observation_refs`；仅换 evidence ID 或 timestamp 不够。Promotion 改变 Incumbent 后，当前 plan 标记 `STALE`，旧 route/focus/hypothesis/candidate path 不得继续机械执行，必须为新 Incumbent 重新 Profile/Plan。若新 Incumbent 重新 Profile 后确实没有任何正常 route，可安装一次空的 fresh plan（状态为 `EXHAUSTED`），随后仍必须执行该 Incumbent cycle 唯一的一次 `final-replan`；不得为了满足非空 plan 约束而虚构 route。
 
 当前 plan 的 routes 全部 terminal 后，controller 只能执行一次 `final-replan`；同一 Incumbent cycle 不得继承已消耗的 final re-plan，新 Incumbent 会开启新的 cycle。没有 OPEN hypothesis、OPEN focus、ACTIVE/PENDING route 且 final re-plan 为空时，guard 才允许 `COMPLETED_WITH_EXHAUSTION`；`SUCCESS/SUBMISSION_READY` 在没有 OPEN hypothesis/focus 时可以结束已因 promotion 变成 `STALE` 的旧 plan。
 

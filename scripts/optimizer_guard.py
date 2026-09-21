@@ -901,10 +901,23 @@ class StateStore:
             else:
                 return {"ok": False, "reason": "PLAN_ALREADY_ACTIVE"}
 
+        current_incumbent_id = (current or {}).get("incumbent_alpha_id")
+        incumbent_id = (state.get("incumbent") or {}).get("alpha_id")
+        new_incumbent_cycle = bool(
+            current
+            and current.get("status") == "STALE"
+            and current_incumbent_id
+            and incumbent_id
+            and str(current_incumbent_id) != str(incumbent_id)
+        )
+
         raw_routes = plan.get("routes", [])
         if not isinstance(raw_routes, list):
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
-        if not raw_routes and not final_replan:
+        # A newly promoted Incumbent may legitimately have no normal routes after
+        # re-profile. Install an empty EXHAUSTED plan for that new cycle so the
+        # mandatory one-time final re-plan can run without fabricating a route.
+        if not raw_routes and not final_replan and not new_incumbent_cycle:
             return {"ok": False, "reason": "PLAN_ROUTES_REQUIRED"}
         try:
             based_on_evidence_revision = int(plan.get("based_on_evidence_revision", state.get("evidence_revision", 0)))
@@ -976,9 +989,6 @@ class StateStore:
         if current:
             state.setdefault("optimization_plan_history", []).append(_copy_json(current))
         revision = int((current or {}).get("revision", 0)) + 1
-        current_incumbent_id = (current or {}).get("incumbent_alpha_id")
-        incumbent_id = (state.get("incumbent") or {}).get("alpha_id")
-        new_incumbent_cycle = bool(current and current_incumbent_id and incumbent_id and str(current_incumbent_id) != str(incumbent_id))
         normalized = {
             "revision": revision,
             "based_on_evidence_revision": based_on_evidence_revision,
