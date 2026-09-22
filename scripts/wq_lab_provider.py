@@ -136,14 +136,25 @@ def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> 
 
     dedicated_payload = wq.get_submission_check(session, alpha_id)
     dedicated_checks = _guard_checks(dedicated_payload if isinstance(dedicated_payload, dict) else {})
+    raw_metrics = _metrics(details)
+    metrics = {
+        key: value
+        for key, value in raw_metrics.items()
+        if not isinstance(value, bool) and isinstance(value, (int, float))
+    }
+    transient_statuses = {"PENDING", "UNKNOWN", "RUNNING", "PROCESSING"}
+    checks_terminal = bool(dedicated_checks) and all(
+        str(row.get("status") or "").upper() not in transient_statuses
+        for row in dedicated_checks
+    )
     return {
         "alpha_id": alpha_id,
         "simulation_id": simulation_id,
         "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "source": "BRAIN:wq_lib.get_result+get_submission_check",
-        "response_complete": bool(dedicated_checks),
+        "response_complete": checks_terminal,
         "authenticated": True,
-        "metrics": _metrics(details),
+        "metrics": metrics,
         "checks": dedicated_checks,
     }
 
