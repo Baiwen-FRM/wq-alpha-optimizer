@@ -1608,7 +1608,12 @@ class StateStore:
             try:
                 synthesis = _normalize_synthesis(plan.get("synthesis"), state, based_on_evidence_revision)
             except ValueError as exc:
-                return {"ok": False, "reason": "SYNTHESIS_CONTRACT", "detail": str(exc)}
+                detail = str(exc)
+                if "unknown synthesis observation ref" in detail or "unknown mechanism evidence ref" in detail:
+                    return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "detail": detail}
+                if "newer than plan snapshot" in detail:
+                    return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_MISMATCH", "detail": detail}
+                return {"ok": False, "reason": "SYNTHESIS_CONTRACT", "detail": detail}
             if not raw_routes:
                 synthesis_rejection = _empty_plan_synthesis_rejection(synthesis)
                 if synthesis_rejection:
