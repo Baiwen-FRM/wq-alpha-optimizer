@@ -18,7 +18,7 @@ from recordset_dashboard import dashboard_visualization_from_recordsets
 BASE_RECORDSETS = {"pnl", "sharpe", "turnover", "daily-pnl", "yearly-stats"}
 
 
-def _load_wq_lib():
+def _load_wq_lib(*, require_submission_start: bool = False):
     try:
         module = importlib.import_module("wq_lib")
     except ImportError as exc:
@@ -26,11 +26,13 @@ def _load_wq_lib():
             "wq_lib is not importable in this Python environment. "
             "Install/use the local WQ Lab environment before running the optimizer."
         ) from exc
-    required = (
+    required = [
         "login", "get_result", "get_submission_check", "get_datafield",
         "get_alpha_recordsets", "get_alpha_recordset", "get_prod_corr",
-        "get_self_corr", "get_operators", "simulate_single", "_start_simulation",
-    )
+        "get_self_corr", "get_operators", "simulate_single",
+    ]
+    if require_submission_start:
+        required.append("_start_simulation")
     missing = [name for name in required if not callable(getattr(module, name, None))]
     if missing:
         raise RuntimeError(
