@@ -727,7 +727,7 @@ def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
-    if state.get("planning_contract") != "v1":
+    if state.get("planning_contract") not in {"v1", "v2"}:
         return None
     plan = state.get("optimization_plan")
     if not plan:
@@ -1258,7 +1258,7 @@ class StateStore:
         # v1 planning compatibility: priority and focus mechanism are derivable
         # from existing route order/binding.
         plan = state.get("optimization_plan")
-        if state.get("planning_contract") == "v1" and isinstance(plan, dict):
+        if state.get("planning_contract") in {"v1", "v2"} and isinstance(plan, dict):
             routes = plan.get("routes", [])
             for priority, route in enumerate(routes, start=1):
                 route.setdefault("priority", priority)
@@ -1854,7 +1854,7 @@ class StateStore:
         if state.get("planning_contract") == "legacy":
             return {"ok": False, "reason": "LEGACY_PLAN_REQUIRED"}
         focus_mechanism = None
-        if state.get("planning_contract") == "v1":
+        if state.get("planning_contract") in {"v1", "v2"}:
             planning_rejection = _active_plan_rejection(state)
             if planning_rejection:
                 return planning_rejection
@@ -2020,9 +2020,9 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing_refs}
         if not (set(normalized["evidence_refs"]) & set(focus.get("evidence_refs", []))):
             return {"ok": False, "reason": "HYPOTHESIS_NOT_GROUNDED_IN_FOCUS_EVIDENCE"}
-        if state.get("planning_contract") == "v1" and normalized["target"] != focus.get("target"):
+        if state.get("planning_contract") in {"v1", "v2"} and normalized["target"] != focus.get("target"):
             return {"ok": False, "reason": "HYPOTHESIS_TARGET_MISMATCH", "focus_target": focus.get("target"), "hypothesis_target": normalized["target"]}
-        if state.get("planning_contract") == "v1":
+        if state.get("planning_contract") in {"v1", "v2"}:
             if not _nonempty(normalized.get("mechanism")):
                 return {"ok": False, "reason": "HYPOTHESIS_MECHANISM_REQUIRED"}
             if normalized.get("mechanism") != focus.get("mechanism"):
