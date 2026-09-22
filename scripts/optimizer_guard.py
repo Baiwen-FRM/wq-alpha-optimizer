@@ -669,20 +669,17 @@ def _normalize_synthesis(
                 normalized_item["exclusion_basis"] = basis
             assessments.append(normalized_item)
 
-        covered_method_families = {str(item.get("method_family")) for item in assessments}
-        missing_method_families = sorted(allowed_method_families - covered_method_families)
-        if missing_method_families:
-            raise ValueError(
-                f"synthesis blocker {name} missing method families: "
-                + ", ".join(missing_method_families)
-            )
-
+        covered_method_families = sorted(
+            {str(item.get("method_family")) for item in assessments}
+        )
         rows.append({
             "name": name,
             "target": target,
             "owner": owner,
             "observation_refs": observations,
             "mechanisms": assessments,
+            "catalog_method_families": sorted(allowed_method_families),
+            "covered_method_families": covered_method_families,
         })
 
     if current_blockers:
@@ -713,7 +710,20 @@ def _synthesis_assessment_map(synthesis: Dict[str, Any]) -> Dict[str, Dict[str, 
 def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any] | None:
     actionable = []
     diagnostic = []
+    uncovered = []
+
     for blocker in synthesis.get("blockers", []):
+        catalog_families = set(blocker.get("catalog_method_families", []))
+        covered_families = set(blocker.get("covered_method_families", []))
+        missing_families = sorted(catalog_families - covered_families)
+        if missing_families:
+            uncovered.append(
+                {
+                    "blocker": blocker.get("name"),
+                    "missing_method_families": missing_families,
+                }
+            )
+
         for assessment in blocker.get("mechanisms", []):
             status = assessment.get("status")
             row = {
@@ -726,6 +736,7 @@ def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any]
                 actionable.append(row)
             elif status == "NEEDS_DIAGNOSTIC":
                 diagnostic.append(row)
+
     if actionable:
         return {
             "ok": False,
@@ -737,6 +748,12 @@ def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any]
             "ok": False,
             "reason": "EMPTY_PLAN_DIAGNOSTIC_REQUIRED",
             "assessments": diagnostic,
+        }
+    if uncovered:
+        return {
+            "ok": False,
+            "reason": "EMPTY_PLAN_METHOD_SPACE_UNASSESSED",
+            "blockers": uncovered,
         }
     return None
 
