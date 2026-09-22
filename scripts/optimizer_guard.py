@@ -575,6 +575,49 @@ def _route_closure_rejection(
     }
 
 
+def _terminal_route_attempt_violations(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
+    plans = [
+        *[item for item in state.get("optimization_plan_history", []) if isinstance(item, dict)],
+        state.get("optimization_plan"),
+    ]
+    violations: list[Dict[str, Any]] = []
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        if incumbent_alpha_id and str(plan.get("incumbent_alpha_id") or "") != incumbent_alpha_id:
+            continue
+        for route in plan.get("routes", []):
+            if not isinstance(route, dict) or route.get("status") not in TERMINAL_ROUTE_STATUSES:
+                continue
+            result_count = max(
+                int(route.get("candidate_result_count", 0) or 0),
+                _route_candidate_result_count(state, str(route.get("id")), incumbent_alpha_id or None),
+            )
+            if result_count > 0:
+                continue
+            activated_revision = int(
+                route.get(
+                    "activated_at_evidence_revision",
+                    plan.get("based_on_evidence_revision", 0),
+                )
+            )
+            evidence_ref = route.get("zero_candidate_closure_evidence_ref")
+            if _novel_post_activation_evidence(state, evidence_ref, activated_revision) is not None:
+                continue
+            violations.append(
+                {
+                    "route_id": route.get("id"),
+                    "status": route.get("status"),
+                    "candidate_result_count": result_count,
+                    "activated_at_evidence_revision": activated_revision,
+                    "closed_at_evidence_revision": route.get("closed_at_evidence_revision"),
+                    "zero_candidate_closure_evidence_ref": evidence_ref,
+                }
+            )
+    return violations
+
+
 def _normalize_plan_route(route: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(route, dict):
         raise ValueError("plan route must be an object")
@@ -2033,6 +2076,13 @@ class StateStore:
                     return {"ok": False, "reason": "FINAL_REPLAN_REQUIRED"}
                 if plan.get("status") != "EXHAUSTED" or any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in plan.get("routes", [])):
                     return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
+                route_violations = _terminal_route_attempt_violations(state)
+                if route_violations:
+                    return {
+                        "ok": False,
+                        "reason": "ZERO_CANDIDATE_ROUTE_NOT_AUDITABLY_EXHAUSTED",
+                        "routes": route_violations,
+                    }
             elif status == "SUBMISSION_READY":
                 readiness = _submission_readiness(state)
                 if not readiness.get("ready"):
