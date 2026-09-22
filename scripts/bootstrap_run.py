@@ -85,9 +85,24 @@ def bootstrap_run(
             "error": str(exc),
         }
 
-    _write_json(raw_path, intake)
-    _write_json(baseline_path, intake.get("baseline"))
-    _write_json(dashboard_path, intake.get("dashboard"))
+    raw_evidence = {
+        "root": intake.get("root"),
+        "visualization": intake.get("visualization"),
+    }
+    try:
+        _write_json(raw_path, raw_evidence)
+        _write_json(baseline_path, intake.get("baseline"))
+        _write_json(dashboard_path, intake.get("dashboard"))
+    except Exception as exc:
+        _append_bootstrap_note(store, status="FAILED", detail=f"Snapshot persistence failed: {exc}")
+        return {
+            "ok": False,
+            "stage": "SNAPSHOT_PERSISTENCE",
+            "run_id": run_id,
+            "state_path": str(state_path),
+            "log_path": str(log_path),
+            "error": str(exc),
+        }
 
     initialized = store.initialize(intake["baseline"])
     if not initialized.get("initialized"):
