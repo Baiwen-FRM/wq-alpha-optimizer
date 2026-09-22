@@ -557,6 +557,94 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(rejected["reason"], "EMPTY_PLAN_HAS_TESTABLE_MECHANISM")
 
 
+    def test_catalog_routes_returns_margin_ladder_and_investability_correctly(self):
+        expectations = {
+            "LOW_RETURNS": ("RETURNS", "optimization/fitness.md"),
+            "LOW_MARGIN": ("MARGIN", "optimization/margin-weight.md"),
+            "IS_LADDER_SHARPE": ("IS_LADDER_SHARPE", "optimization/is-ladder.md"),
+            "LOW_INVESTABILITY_CONSTRAINED_SHARPE": ("INVESTABILITY", "optimization/robust-universe.md"),
+            "LOW_AFTER_COST_ILLIQUID_UNIVERSE_SHARPE": ("INVESTABILITY", "optimization/robust-universe.md"),
+        }
+        for blocker, (target, owner) in expectations.items():
+            with self.subTest(blocker=blocker):
+                entry = guard._catalog_entry_for_blocker(blocker)
+                self.assertEqual(entry["target"], target)
+                self.assertEqual(entry["owner"], owner)
+                self.assertTrue(entry["mechanisms"])
+
+    def test_high_turnover_catalog_keeps_distinct_reference_method_families(self):
+        entry = guard._catalog_entry_for_blocker("HIGH_TURNOVER")
+        families = {row["method_family"] for row in entry["mechanisms"]}
+        self.assertIn("temporal_aggregation_or_event_gating", families)
+        self.assertIn("delta_surprise_or_revision_representation", families)
+        self.assertIn("verified_target_tvr_control", families)
+        self.assertIn("verified_delta_or_position_change_limit", families)
+
+    def test_conflicting_cap_and_sector_clues_require_discriminator_not_guess(self):
+        store = self._store([{"name": "LOW_SUB_UNIVERSE_SHARPE", "status": "FAIL"}])
+        blocker = self._evidence(
+            store, "E_SUB", "DIAGNOSTIC", "LOW_SUB_UNIVERSE_SHARPE",
+            "Sub-universe Sharpe fails."
+        )
+        cap = self._evidence(
+            store, "E_CAP", "DIAGNOSTIC", "SHARPE_BY_CAP",
+            "Sharpe varies sharply across capitalization buckets."
+        )
+        sector = self._evidence(
+            store, "E_SECTOR", "DIAGNOSTIC", "SHARPE_BY_SECTOR",
+            "Sharpe also varies sharply across sectors, so the cap pattern may be compositional."
+        )
+        row = self._blocker_row(
+            "LOW_SUB_UNIVERSE_SHARPE",
+            [
+                self._assessment(
+                    "A_CONFLICT",
+                    "size_liquidity_exposure",
+                    "exposure_control_or_grouping",
+                    "NEEDS_DIAGNOSTIC",
+                    [blocker, cap, sector],
+                    reasoning=(
+                        "Cap and sector-conditioned performance both vary. Current evidence cannot tell "
+                        "whether size exposure is primary or sector composition creates the apparent cap effect."
+                    ),
+                    next_question=(
+                        "Does the cap gradient remain after a sector-conditioned comparison, or does it disappear?"
+                    ),
+                )
+            ],
+            [blocker, cap, sector],
+        )
+        rejected = store.set_plan(self._plan(store, [row], []))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "EMPTY_PLAN_DIAGNOSTIC_REQUIRED")
+
+    def test_unknown_project_check_routes_to_definition_resolution_not_fake_repair(self):
+        store = self._store([{"name": "POWER_POOL_X", "status": "FAIL"}])
+        ref = self._evidence(
+            store, "E_UNKNOWN", "DIAGNOSTIC", "POWER_POOL_X",
+            "Project-specific check is failing but its current definition is not known."
+        )
+        entry = guard._catalog_entry_for_blocker("POWER_POOL_X")
+        self.assertEqual(entry["owner"], "runtime/thresholds.md")
+        self.assertEqual(entry["mechanisms"][0]["method_family"], "fetch_current_definition_before_candidate")
+        row = self._blocker_row(
+            "POWER_POOL_X",
+            [
+                self._assessment(
+                    "A_DEFINE",
+                    "definition_resolution",
+                    "fetch_current_definition_before_candidate",
+                    "NEEDS_DIAGNOSTIC",
+                    [ref],
+                    next_question="What does the current authenticated platform definition require?",
+                )
+            ],
+            [ref],
+        )
+        rejected = store.set_plan(self._plan(store, [row], []))
+        self.assertEqual(rejected["reason"], "EMPTY_PLAN_DIAGNOSTIC_REQUIRED")
+
+
 if __name__ == "__main__":
     import unittest
 
