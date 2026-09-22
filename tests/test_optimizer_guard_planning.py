@@ -63,6 +63,15 @@ class PlanningGuardTests(TestCase):
         )
         self.assertTrue(result["ok"], result)
 
+    def _post_activation_evidence(self, evidence_id, claim=None):
+        self._evidence(
+            evidence_id,
+            "ROUTE_DIAGNOSTIC",
+            "BRAIN:get_record_set_data",
+            claim or f"New post-activation diagnostic evidence {evidence_id} changes the active route question.",
+        )
+        return evidence_id
+
     def _plan(self, *routes):
         return {
             "based_on_evidence_revision": 2,
@@ -151,6 +160,72 @@ class PlanningGuardTests(TestCase):
         self.assertEqual(result["next_required_action"], "SET_FOCUS")
         self.assertEqual(result["active_route_id"], "R1")
 
+    def test_active_route_cannot_close_without_candidate_result_or_new_evidence(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        rejected = self.store.close_route("R1", "DISMISSED", "Do not allow plan-only dismissal.")
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE")
+        self.assertEqual(self.store.read()["optimization_plan"]["routes"][0]["status"], "ACTIVE")
+
+    def test_open_focus_cannot_exhaust_without_candidate_result_or_new_evidence(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        self._open_focus()
+        rejected = self.store.exhaust_focus("Do not allow zero-work exhaustion.")
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE")
+        self.assertEqual(self.store.read()["focus"]["status"], "OPEN")
+
+        close_ref = self._post_activation_evidence("E_INVALIDATES_R1")
+        closed = self.store.exhaust_focus("A new diagnostic invalidates the route.", close_ref)
+        self.assertTrue(closed["ok"], closed)
+        route = self.store.read()["optimization_plan"]["routes"][0]
+        self.assertEqual(route["status"], "EXHAUSTED")
+        self.assertEqual(route["zero_candidate_closure_evidence_ref"], close_ref)
+
+    def test_evaluated_candidate_result_satisfies_route_exhaustion_gate(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        self._open_focus()
+        opened = self.store.open_hypothesis("H_ROUTE_RESULT", self._hypothesis_contract())
+        self.assertTrue(opened["ok"], opened)
+        candidate = {
+            "parent_id": "ROOT",
+            "hypothesis_id": "H_ROUTE_RESULT",
+            "expression": "rank(-close)",
+            "fields": ["close"],
+            "settings": self.store.read()["incumbent"]["settings"],
+            "language": "FASTEXPR",
+        }
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fingerprint = reserved["fingerprint"]
+        self.assertTrue(self.store.record_transport(fingerprint, "POSTED", "SIM-ROUTE-RESULT")["ok"])
+        evaluated = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-REFUTED",
+                "simulation_id": "SIM-ROUTE-RESULT",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 1.9},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(evaluated["status"], "REFUTED", evaluated)
+        route = self.store.read()["optimization_plan"]["routes"][0]
+        self.assertEqual(route["candidate_result_count"], 1)
+
+        exhausted = self.store.exhaust_focus("The tested hypothesis was refuted and no distinct question remains.")
+        self.assertTrue(exhausted["ok"], exhausted)
+        self.assertEqual(self.store.read()["optimization_plan"]["routes"][0]["status"], "EXHAUSTED")
+
     def test_exhausting_focus_activates_pending_route_without_finishing_run(self):
         self.store.set_plan(
             self._plan(
@@ -159,7 +234,8 @@ class PlanningGuardTests(TestCase):
             )
         )
         self._open_focus()
-        result = self.store.exhaust_focus("R1 has no remaining falsifiable question.")
+        close_ref = self._post_activation_evidence("E_CLOSE_R1")
+        result = self.store.exhaust_focus("R1 has no remaining falsifiable question.", close_ref)
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["next_route"]["id"], "R2")
         state = self.store.read()
@@ -172,7 +248,8 @@ class PlanningGuardTests(TestCase):
             self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
         )
         self._open_focus()
-        self.store.exhaust_focus("R1 exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_FINAL")
+        self.store.exhaust_focus("R1 exhausted.", close_ref)
         blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No more routes.")
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
         replan = self.store.set_plan({"routes": []}, final_replan=True)
@@ -186,7 +263,8 @@ class PlanningGuardTests(TestCase):
             self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
         )
         self._open_focus()
-        self.store.exhaust_focus("R1 exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_ONCE")
+        self.store.exhaust_focus("R1 exhausted.", close_ref)
         self.assertTrue(self.store.set_plan({"routes": []}, final_replan=True)["ok"])
         result = self.store.set_plan({"routes": []}, final_replan=True)
         self.assertEqual(result["reason"], "FINAL_REPLAN_ALREADY_USED")
@@ -305,7 +383,8 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(self.store.register_evidence({"id": "E_NEXT", "kind": "DIAGNOSTIC", "subject": "TAIL", "source": "BRAIN:get_record_set_data", "observed_at": "2026-09-21T00:02:00Z", "claim": "The real run later recorded a distinct tail observation."})["ok"])
         self.assertTrue(self.store.set_plan(self._plan(("R1", "LOW_SUB_UNIVERSE_SHARPE", "optimization/subuniverse.md", "breadth_robustness", ["E_ROOT"], "The blocker supports a breadth route."), ("R2", "SHARPE", "optimization/sharpe.md", "tail_robustness", ["E_NEXT"], "The later observation supports a separate tail route.")))["ok"])
         self._open_focus(route_id="R1", target="LOW_SUB_UNIVERSE_SHARPE", owner="optimization/subuniverse.md", evidence="E_ROOT", blocker="LOW_SUB_UNIVERSE_SHARPE")
-        result = self.store.exhaust_focus("The first focus is exhausted; the next route remains justified.")
+        self.assertTrue(self.store.register_evidence({"id": "E_CLOSE_REAL", "kind": "DIAGNOSTIC", "subject": "ROUTE_DIAGNOSTIC", "source": "BRAIN:get_record_set_data", "observed_at": "2026-09-21T00:03:00Z", "claim": "A new post-activation diagnostic invalidates the first breadth question."})["ok"])
+        result = self.store.exhaust_focus("The first focus is exhausted; the next route remains justified.", "E_CLOSE_REAL")
         self.assertEqual(result["next_route"]["id"], "R2")
         self.assertNotEqual(self.store.read().get("run", {}).get("status"), "COMPLETED_WITH_EXHAUSTION")
 
@@ -384,7 +463,8 @@ class PlanningGuardTests(TestCase):
     def test_exact_duplicate_evidence_id_cannot_reopen_exhausted_route(self):
         self.store.set_plan(self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")))
         self._open_focus()
-        self.store.exhaust_focus("The route has no remaining falsifiable question.")
+        close_ref = self._post_activation_evidence("E_CLOSE_DUP_ID")
+        self.store.exhaust_focus("The route has no remaining falsifiable question.", close_ref)
         self.assertTrue(self.store.register_evidence({
             "id": "E_DUP_ID", "kind": "DIAGNOSTIC", "subject": "LOW_SHARPE", "source": "BRAIN:test",
             "observed_at": "2026-09-21T00:01:00Z", "claim": "Current LOW_SHARPE failure supports a signal-quality route.",
@@ -392,14 +472,15 @@ class PlanningGuardTests(TestCase):
         plan = self._plan(("R1_REOPEN", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "The same fact was re-registered."))
         plan["routes"][0]["reopen_reason"] = "A new evidence ID was observed."
         plan["routes"][0]["new_observation_refs"] = ["E_DUP_ID"]
-        plan["based_on_evidence_revision"] = 3
+        plan["based_on_evidence_revision"] = 4
         rejected = self.store.set_plan(plan, final_replan=True)
         self.assertEqual(rejected["reason"], "ROUTE_NEW_OBSERVATION_NOT_NOVEL")
 
     def test_timestamp_only_duplicate_evidence_cannot_reopen_exhausted_route(self):
         self.store.set_plan(self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")))
         self._open_focus()
-        self.store.exhaust_focus("The route has no remaining falsifiable question.")
+        close_ref = self._post_activation_evidence("E_CLOSE_DUP_TIME")
+        self.store.exhaust_focus("The route has no remaining falsifiable question.", close_ref)
         self.assertTrue(self.store.register_evidence({
             "id": "E_DUP_TIME", "kind": "DIAGNOSTIC", "subject": "LOW_SHARPE", "source": "BRAIN:test",
             "observed_at": "2026-09-21T00:02:00Z", "claim": "Current LOW_SHARPE failure supports a signal-quality route.",
@@ -407,14 +488,15 @@ class PlanningGuardTests(TestCase):
         plan = self._plan(("R1_REOPEN", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Only the timestamp changed."))
         plan["routes"][0]["reopen_reason"] = "The same observation was timestamped again."
         plan["routes"][0]["new_observation_refs"] = ["E_DUP_TIME"]
-        plan["based_on_evidence_revision"] = 3
+        plan["based_on_evidence_revision"] = 4
         rejected = self.store.set_plan(plan, final_replan=True)
         self.assertEqual(rejected["reason"], "ROUTE_NEW_OBSERVATION_NOT_NOVEL")
 
     def test_genuinely_new_evidence_can_reopen_exhausted_route(self):
         self.store.set_plan(self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")))
         self._open_focus()
-        self.store.exhaust_focus("The route has no remaining falsifiable question.")
+        close_ref = self._post_activation_evidence("E_CLOSE_NEW")
+        self.store.exhaust_focus("The route has no remaining falsifiable question.", close_ref)
         self.assertTrue(self.store.register_evidence({
             "id": "E_NEW", "kind": "DIAGNOSTIC", "subject": "TAIL", "source": "BRAIN:get_record_set_data",
             "observed_at": "2026-09-21T00:02:00Z", "claim": "A distinct tail observation supports a new route question.",
@@ -422,20 +504,21 @@ class PlanningGuardTests(TestCase):
         plan = self._plan(("R1_REOPEN", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "The new tail evidence changes the falsifiable question."))
         plan["routes"][0]["reopen_reason"] = "A distinct tail observation was registered after exhaustion."
         plan["routes"][0]["new_observation_refs"] = ["E_NEW"]
-        plan["based_on_evidence_revision"] = 3
+        plan["based_on_evidence_revision"] = 4
         reopened = self.store.set_plan(plan, final_replan=True)
         self.assertTrue(reopened["ok"], reopened)
 
     def test_final_replan_resets_for_new_incumbent_cycle(self):
         self.store.set_plan(self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route.")))
         self._open_focus()
-        self.store.exhaust_focus("The first route is exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_CYCLE")
+        self.store.exhaust_focus("The first route is exhausted.", close_ref)
         self.assertTrue(self.store.register_evidence({
             "id": "E_CYCLE", "kind": "DIAGNOSTIC", "subject": "TAIL", "source": "BRAIN:get_record_set_data",
             "observed_at": "2026-09-21T00:02:00Z", "claim": "A distinct tail observation supports the final re-plan route.",
         })["ok"])
         cycle_plan = self._plan(("R2", "SHARPE", "optimization/sharpe.md", "signal_quality_confirmation", ["E_CYCLE"], "The final re-plan has one justified route."))
-        cycle_plan["based_on_evidence_revision"] = 3
+        cycle_plan["based_on_evidence_revision"] = 4
         self.assertTrue(self.store.set_plan(cycle_plan, final_replan=True)["ok"])
         self._open_focus(route_id="R2", evidence="E_CYCLE")
         self._promote_current_plan(evidence="E_CYCLE", child_id="CHILD_B")
@@ -444,7 +527,8 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(fresh["ok"], fresh)
         self.assertFalse(fresh["plan"]["final_replan_used"])
         self._open_focus(route_id="R3")
-        self.store.exhaust_focus("The new incumbent route is exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_NEW_INCUMBENT")
+        self.store.exhaust_focus("The new incumbent route is exhausted.", close_ref)
         one_more = self.store.set_plan({"routes": []}, final_replan=True)
         self.assertTrue(one_more["ok"], one_more)
 
@@ -540,7 +624,8 @@ class PlanningGuardTests(TestCase):
                 ("R2", "SHARPE", "optimization/sharpe.md", "signal_quality_confirmation", ["E1"], "Second route."),
             )
         )
-        closed = self.store.close_route("R1", "COMPLETED", "R1 completed for the old incumbent.")
+        close_ref = self._post_activation_evidence("E_CLOSE_HISTORY")
+        closed = self.store.close_route("R1", "COMPLETED", "R1 completed for the old incumbent.", close_ref)
         self.assertTrue(closed["ok"], closed)
         self._open_focus(route_id="R2")
         self._promote_current_plan(child_id="CHILD_HISTORY")
@@ -598,7 +683,8 @@ class PlanningGuardTests(TestCase):
             )
         )
         self._open_focus(route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE")
-        exhausted = self.store.exhaust_focus("The signal-quality mechanism is exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_MECHANISM")
+        exhausted = self.store.exhaust_focus("The signal-quality mechanism is exhausted.", close_ref)
         self.assertEqual(exhausted["next_route"]["id"], "R2")
 
         opened = self.store.set_focus(
@@ -619,7 +705,8 @@ class PlanningGuardTests(TestCase):
             )
         )
         self._open_focus()
-        self.store.exhaust_focus("Initial route exhausted.")
+        close_ref = self._post_activation_evidence("E_CLOSE_REOPEN")
+        self.store.exhaust_focus("Initial route exhausted.", close_ref)
         self.assertTrue(
             self.store.register_evidence(
                 {

@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.5.3
+# wq-alpha-optimizer v3.5.4
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -90,3 +90,13 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - recordset count is platform-derived rather than hard-coded: if BRAIN lists 19, all 19 are attempted; if it lists a different number, that full current list is attempted;
 - Profile/Plan are explicitly nonterminal. An active plan returns `must_continue=true` and `next_required_action=SET_FOCUS`; normal optimize execution must continue to candidate simulation/result instead of replying “next step later”;
 - WQ Lab remains BRAIN I/O only; optimization reasoning, state, charts and Markdown remain in the Skill.
+
+
+## v3.5.4 route-attempt enforcement
+
+- fixes the remaining loophole where a controller could create an actionable ACTIVE route, close it without any Focus/Hypothesis/Candidate Result, run an empty final re-plan, and still reach `COMPLETED_WITH_EXHAUSTION`;
+- every route now records its activation evidence revision and candidate Results are bound back to `route_id`;
+- ACTIVE route closure requires either at least one evaluated candidate Result, or an explicit genuinely-new post-activation diagnostic `evidence_ref`;
+- duplicate/timestamp-only/pre-plan evidence cannot satisfy the zero-candidate closure exception;
+- automatic activation of the next pending route stamps a new activation revision, so each route has its own attempt boundary;
+- exhaustion terminal performs a second route-history audit and rejects unaudited zero-candidate closures.
