@@ -193,6 +193,9 @@ def write_chart_svg(state: Dict[str, Any], raw: Any) -> Dict[str, Any]:
     plot_w, plot_h = width - left - right, height - top - bottom
     all_values = [v for series in chart["series"] for v in series["values"]]
     ymin, ymax = min(all_values), max(all_values)
+    if chart["type"] == "bar":
+        ymin = min(ymin, 0.0)
+        ymax = max(ymax, 0.0)
     if ymin == ymax:
         pad = abs(ymin) * 0.05 or 1.0
     else:
