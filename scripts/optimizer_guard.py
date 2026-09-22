@@ -642,6 +642,24 @@ def _normalize_synthesis(
                         "EXCLUDED mechanism requires exclusion_basis="
                         "CURRENT_DIAGNOSTIC/CURRENT_CANDIDATE_RESULT/SCOPE_BOUNDARY"
                     )
+                evidence_rows = [state["evidence"][ref] for ref in refs]
+                if basis == "CURRENT_DIAGNOSTIC":
+                    if not any(
+                        str(row.get("kind", "")).upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
+                        and str(row.get("source", "")).startswith("BRAIN:")
+                        for row in evidence_rows
+                    ):
+                        raise ValueError(
+                            "CURRENT_DIAGNOSTIC exclusion requires BRAIN diagnostic-exclusion evidence"
+                        )
+                elif basis == "CURRENT_CANDIDATE_RESULT":
+                    if not any(str(row.get("kind", "")).upper() == "CANDIDATE_RESULT" for row in evidence_rows):
+                        raise ValueError(
+                            "CURRENT_CANDIDATE_RESULT exclusion requires CANDIDATE_RESULT evidence"
+                        )
+                elif basis == "SCOPE_BOUNDARY":
+                    if not any(str(row.get("kind", "")).upper() == "SCOPE_BOUNDARY" for row in evidence_rows):
+                        raise ValueError("SCOPE_BOUNDARY exclusion requires SCOPE_BOUNDARY evidence")
                 normalized_item["exclusion_basis"] = basis
             assessments.append(normalized_item)
 
