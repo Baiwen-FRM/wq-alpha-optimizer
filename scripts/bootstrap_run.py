@@ -43,7 +43,15 @@ def bootstrap_run(
 ) -> dict[str, Any]:
     # Local compatibility check is allowed before the run starts because it
     # performs no BRAIN I/O.
-    provider._load_wq_lib()
+    try:
+        provider._load_wq_lib()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "stage": "LOCAL_PROVIDER_PREFLIGHT",
+            "root_alpha_id": alpha_id,
+            "error": str(exc),
+        }
 
     started = guard.start_run(alpha_id)
     if not started.get("ok"):
