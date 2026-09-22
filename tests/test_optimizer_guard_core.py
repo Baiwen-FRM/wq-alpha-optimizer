@@ -583,6 +583,9 @@ class CoreGuardTests(TestCase):
         self.assertEqual(state["incumbent"]["alpha_id"], "CHILD-PROGRESS")
         self.assertEqual(state["incumbent"]["result_evidence"]["checks"][0]["status"], "FAIL")
         self.assertEqual(state["optimization_plan"]["status"], "STALE")
+        log_text = Path(state["run"]["log_path"]).read_text(encoding="utf-8")
+        self.assertIn("**Current Incumbent:** CHILD-PROGRESS", log_text)
+        self.assertIn("### Optimization Progression", log_text)
 
     def test_refuted_payload_does_not_automatically_exhaust_mechanism_route(self):
         self.assertTrue(self._set_plan()["ok"])
