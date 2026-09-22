@@ -77,6 +77,133 @@ class WQLabProviderTests(TestCase):
         self.assertEqual(baseline["fields"], ["close"])
         self.assertEqual(baseline["result_evidence"]["checks"][0]["status"], "FAIL")
 
+    def test_visualization_snapshot_reuses_rich_root_recordsets_without_post(self):
+        class FakeWQ:
+            simulate_calls = 0
+
+            @staticmethod
+            def get_alpha_recordsets(session, alpha_id):
+                return {
+                    "count": 2,
+                    "results": [
+                        {"name": "pnl", "title": "PnL"},
+                        {"name": "coverage", "title": "Coverage"},
+                    ],
+                }
+
+            @staticmethod
+            def get_alpha_recordset(session, alpha_id, name):
+                if name == "pnl":
+                    return {
+                        "schema": {
+                            "name": "pnl",
+                            "title": "PnL",
+                            "properties": [
+                                {"name": "date", "title": "Date", "type": "date"},
+                                {"name": "pnl", "title": "PnL", "type": "amount"},
+                            ],
+                        },
+                        "records": [["2026-01-01", 1.0]],
+                    }
+                return {
+                    "schema": {
+                        "name": "coverage",
+                        "title": "Coverage",
+                        "properties": [
+                            {"name": "date", "title": "Date", "type": "date"},
+                            {"name": "coverage", "title": "Coverage", "type": "number"},
+                        ],
+                    },
+                    "records": [["2026-01-01", 0.9]],
+                }
+
+            @classmethod
+            def simulate_single(cls, session, payload):
+                cls.simulate_calls += 1
+                raise AssertionError("rich root recordsets should be reused")
+
+        details = {"type": "REGULAR", "regular": {"code": "rank(close)"}, "settings": {"visualization": True}}
+        result = provider.visualization_snapshot(
+            object(), FakeWQ, "ROOT", details=details, discovery_attempts=1, discovery_sleep_seconds=0
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["diagnostic_alpha_id"], "ROOT")
+        self.assertEqual(FakeWQ.simulate_calls, 0)
+
+    def test_visualization_snapshot_posts_exactly_one_control_when_root_is_basic_only(self):
+        class FakeWQ:
+            simulate_calls = 0
+            payload = None
+
+            @staticmethod
+            def get_alpha_recordsets(session, alpha_id):
+                if alpha_id == "ROOT":
+                    return {
+                        "count": 1,
+                        "results": [{"name": "pnl", "title": "PnL"}],
+                    }
+                return {
+                    "count": 2,
+                    "results": [
+                        {"name": "pnl", "title": "PnL"},
+                        {"name": "sharpe-by-cap", "title": "Sharpe by Cap"},
+                    ],
+                }
+
+            @staticmethod
+            def get_alpha_recordset(session, alpha_id, name):
+                if name == "sharpe-by-cap":
+                    return {
+                        "schema": {
+                            "name": "sharpe-by-cap",
+                            "title": "Sharpe by Cap",
+                            "properties": [
+                                {"name": "bucket", "title": "Bucket", "type": "string"},
+                                {"name": "sharpe", "title": "Sharpe", "type": "number"},
+                            ],
+                        },
+                        "records": [["0-20", 1.2]],
+                    }
+                return {
+                    "schema": {
+                        "name": "pnl",
+                        "title": "PnL",
+                        "properties": [
+                            {"name": "date", "title": "Date", "type": "date"},
+                            {"name": "pnl", "title": "PnL", "type": "amount"},
+                        ],
+                    },
+                    "records": [["2026-01-01", 1.0]],
+                }
+
+            @classmethod
+            def simulate_single(cls, session, payload):
+                cls.simulate_calls += 1
+                cls.payload = payload
+                return {"status": "done", "alpha_id": "VIS1"}
+
+        details = {
+            "type": "REGULAR",
+            "regular": {"code": "ts_mean(close, 10)"},
+            "settings": {
+                "region": "GBR",
+                "universe": "TOP700",
+                "delay": 0,
+                "decay": 10,
+                "visualization": False,
+            },
+        }
+        result = provider.visualization_snapshot(
+            object(), FakeWQ, "ROOT", details=details, discovery_attempts=1, discovery_sleep_seconds=0
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["diagnostic_alpha_id"], "VIS1")
+        self.assertEqual(FakeWQ.simulate_calls, 1)
+        self.assertEqual(FakeWQ.payload["regular"], "ts_mean(close, 10)")
+        self.assertTrue(FakeWQ.payload["settings"]["visualization"])
+        self.assertEqual(FakeWQ.payload["settings"]["decay"], 10)
+        self.assertEqual(FakeWQ.payload["settings"]["region"], "GBR")
+
     def test_recordset_adapters_are_deterministic(self):
         recordsets = {
             "sharpe-by-cap": {
