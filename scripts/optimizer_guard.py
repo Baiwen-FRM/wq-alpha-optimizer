@@ -673,11 +673,8 @@ def _normalize_synthesis(
 
     if current_blockers:
         missing = sorted(set(current_blockers) - seen_blockers)
-        extra = sorted(seen_blockers - set(current_blockers))
         if missing:
             raise ValueError("synthesis missing current blockers: " + ", ".join(missing))
-        if extra:
-            raise ValueError("synthesis contains non-current blockers: " + ", ".join(extra))
 
     return {
         "incumbent_alpha_id": str((state.get("incumbent") or {}).get("alpha_id") or ""),
