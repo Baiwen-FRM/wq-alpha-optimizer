@@ -1635,6 +1635,25 @@ class StateStore:
         if based_on_evidence_revision < 0 or based_on_evidence_revision > int(state.get("evidence_revision", 0)):
             return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_UNKNOWN"}
 
+        # Preserve the more fundamental evidence-integrity error before
+        # evaluating the higher-level synthesis contract.
+        for raw_route in raw_routes:
+            if not isinstance(raw_route, dict):
+                continue
+            raw_refs = raw_route.get("evidence_refs")
+            if isinstance(raw_refs, list):
+                missing_refs = [
+                    ref for ref in raw_refs
+                    if isinstance(ref, str) and ref.strip() and ref not in state.get("evidence", {})
+                ]
+                if missing_refs:
+                    return {
+                        "ok": False,
+                        "reason": "UNKNOWN_EVIDENCE_REF",
+                        "missing": sorted(dict.fromkeys(missing_refs)),
+                        "route_id": raw_route.get("id"),
+                    }
+
         synthesis = None
         if state.get("planning_contract") == "v2" and _current_blockers(state):
             try:
