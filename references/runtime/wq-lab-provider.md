@@ -46,6 +46,8 @@ get_alpha_recordset(session, alpha_id, recordset_type) -> dict
 
 These three functions must return BRAIN facts without dashboard-specific transformation.
 
+For the reserved-candidate executor, the Skill also uses the **already existing** WQ Lab compatibility primitive `_start_simulation(session, payload)` to separate one-shot POST from Location polling. This is not a new WQ Lab modification: the user's existing package already imports that helper. It is required only by the executor path; bootstrap/intake does not depend on it. The Skill still does not issue BRAIN HTTP directly.
+
 ## Deterministic intake
 
 The normal optimizer entrypoint is:
@@ -69,6 +71,20 @@ The provider layer uses one authenticated WQ Lab session and always performs the
 9. build deterministic dashboard field rows and chart specs.
 
 The bootstrap stores all three under `logs/.data/<run_id>/`: `intake.json` is raw evidence, `baseline.json` is only the Guard initialization projection, and `dashboard.json` is only the deterministic presentation projection. The lower-level provider CLI remains available for debugging/recovery but is not the normal controller path.
+
+## Candidate execution
+
+After Guard reserve succeeds:
+
+```text
+python3 scripts/execute_reserved_candidate.py \
+  --state <STATE_PATH> \
+  --root-alpha-id <ROOT_ALPHA_ID>
+```
+
+The executor finds the unique active reserved candidate when no fingerprint is supplied. It persists candidate payload/submission/result artifacts under `logs/.data/<run_id>/candidates/<fingerprint>/`, uses WQ Lab for submission/poll/result/check reads, and uses Guard for every state transition/evaluation/promotion. A rerun of a POSTED candidate resumes the stored Location; a rerun of a promoted/evaluated candidate is idempotent.
+
+`SUBMITTING` or `AMBIGUOUS_POST` without a known Location is intentionally non-self-healing because reposting could duplicate a real BRAIN submission. If an existing Location is externally reconciled, pass `--recover-location <LOCATION>`; this attaches the existing simulation and resumes polling, never posts a replacement.
 
 ## Visualization normalization
 
