@@ -2,19 +2,28 @@
 
 目标是取得**足以定位当前 mechanism 的证据**，不是机械跑满所有诊断。用户可读证据只追加到本次 run 的 canonical log；machine state 由 guard 独立维护。
 
-## Stage 0 — RUN START
+## Stage 0 — RUN START / DETERMINISTIC BOOTSTRAP
 
-收到并接受一个现有 Alpha ID 后，**在任何平台读取、诊断或 simulation 之前**运行：
+收到并接受一个现有 Alpha ID 后，正常路径只运行一个入口：
 
 ```text
-python3 scripts/optimizer_guard.py start-run --root-alpha-id <ID>
+python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-Guard 必须返回 `log_exists=true`、`log_path` 和 `state_path`。`log_path` 必须位于当前 `wq-alpha-optimizer/logs/` 下。后续所有阶段只使用这一个 MD；需要写可读分析时使用同一 `state_path` 的 `append-log`，不得手工创建第二份 run MD。
+该脚本负责固定顺序完成：
 
-如果 canonical MD 无法创建，当前 optimizer run 不继续。
+1. 本地 WQ Lab capability preflight（不访问 BRAIN）；
+2. 创建本次 canonical run MD/state；
+3. 通过本地 WQ Lab 取得 Root details / checks / exact used-field metadata；
+4. 检查现有 recordsets；必要时只创建一个 same-expression / same-settings / `visualization=true` diagnostic control；
+5. 有界发现并读取 raw recordsets；
+6. 把完整 intake 保存到本次 `logs/.data/<run_id>/`；
+7. 用 baseline projection 初始化 Guard；
+8. 用 dashboard projection 更新同一个 canonical MD 首页。
 
-随后按 `wq-lab-provider.md` 运行固定的 WQ Lab intake。不要让 controller 临场决定用 CNHKMCP 还是本地库，也不要手写 HTTP 复制已有 WQ Lab primitive。intake 同时产出 raw evidence、Guard baseline projection 和 Dashboard projection；三者职责不同。
+Controller **不得**在正常路径上手工重排这些步骤，也不得把它拆回 `start-run → provider intake → init → update-dashboard` 四段自由编排。低层命令只用于调试/恢复。
+
+Bootstrap 返回 `READY_FOR_DIAGNOSIS` 后才进入 Stage A/B。若本地 WQ Lab capability preflight 失败，不创建 run；若认证/BRAIN intake 在 run 创建后失败，记录 BOOTSTRAP failure 并停止，不静默改用 CNHKMCP。
 
 ## Stage A — ROOT
 
