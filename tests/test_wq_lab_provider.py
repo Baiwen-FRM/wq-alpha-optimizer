@@ -62,7 +62,7 @@ class WQLabProviderTests(TestCase):
 
             @staticmethod
             def get_submission_check(session, alpha_id):
-                return {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}
+                return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}}
 
         snapshot = provider.root_snapshot(object(), FakeWQ, "A1")
         self.assertEqual(snapshot["fields"][0]["field_id"], "close")
@@ -76,6 +76,45 @@ class WQLabProviderTests(TestCase):
         self.assertEqual(baseline["expression"], "rank(close)")
         self.assertEqual(baseline["fields"], ["close"])
         self.assertEqual(baseline["result_evidence"]["checks"][0]["status"], "FAIL")
+
+    def test_dedicated_submission_check_overrides_detail_check_snapshot(self):
+        root = {
+            "alpha_id": "A1",
+            "type": "REGULAR",
+            "expressions": ["rank(close)"],
+            "settings": {"region": "GBR", "delay": 0, "universe": "TOP700"},
+            "metrics": {"SHARPE": 2.0},
+            "fields": [{"field_id": "close"}],
+            "details_raw": {
+                "is": {"checks": [{"name": "LOW_SHARPE", "result": "PASS"}]}
+            },
+            "submission_check_raw": {
+                "is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL", "value": 2.0, "limit": 2.5}]}
+            },
+        }
+        baseline = provider._baseline_from_root(root)
+        self.assertEqual(baseline["result_evidence"]["checks"][0]["status"], "FAIL")
+        self.assertEqual(baseline["result_evidence"]["checks"][0]["value"], 2.0)
+        self.assertTrue(baseline["result_evidence"]["response_complete"])
+        self.assertIn("get_submission_check", baseline["result_evidence"]["source"])
+
+    def test_missing_dedicated_submission_check_is_not_marked_complete(self):
+        root = {
+            "alpha_id": "A1",
+            "type": "REGULAR",
+            "expressions": ["rank(close)"],
+            "settings": {"region": "GBR", "delay": 0, "universe": "TOP700"},
+            "metrics": {"SHARPE": 2.0},
+            "fields": [{"field_id": "close"}],
+            "details_raw": {
+                "is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}
+            },
+            "submission_check_raw": {},
+        }
+        baseline = provider._baseline_from_root(root)
+        self.assertEqual(baseline["result_evidence"]["checks"][0]["status"], "FAIL")
+        self.assertFalse(baseline["result_evidence"]["response_complete"])
+        self.assertIn("checks_fallback", baseline["result_evidence"]["source"])
 
     def test_visualization_snapshot_reuses_rich_root_recordsets_without_post(self):
         class FakeWQ:
