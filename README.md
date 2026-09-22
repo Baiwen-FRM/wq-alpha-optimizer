@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.3.1
+# wq-alpha-optimizer v3.3.2
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -43,3 +43,11 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - planned routes must already be actionable, rather than placeholders for possible future diagnostics;
 - zero-hypothesis route exhaustion requires a newly observed reason that removed actionability;
 - conflicting PENDING/UNKNOWN submission evidence gets one bounded reconciliation attempt and otherwise remains unresolved.
+
+
+## v3.3.2 diagnostic-first exhaustion
+
+- a route cannot claim exhaustion while a material in-scope discriminator is still cheaply obtainable;
+- Robust/Sub-Universe failures escalate to targeted visualization/recordset diagnostics before structural or decay candidates when those diagnostics can distinguish the root cause;
+- prior-run negative evidence may prevent duplicate candidates only when Root identity and current material facts still match;
+- final logs must show which diagnostics were completed, reused, unavailable, or still unknown before exhaustion.
