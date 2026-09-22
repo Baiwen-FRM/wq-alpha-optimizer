@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
 
+from run_dashboard import enrich_context_with_charts, render_dashboard
+
 SCHEMA_VERSION = 4
 MAX_EXPLICIT_429_RETRIES = 3
 LOCKED_SCOPE_KEYS = {"region", "delay", "universe", "instrumenttype"}
@@ -61,7 +63,7 @@ def _initial_log_text(root_alpha_id: str, run_id: str, started_at: str, status: 
         f"- Started at: `{started_at}`\n"
         f"- Status: `{status}`\n\n"
         "> This file is the single canonical human-readable log for this optimizer run. "
-        "All later notes/results must be appended to this file; do not create a second run MD.\n\n"
+        "The dashboard below is regenerated from machine state; the audit trail remains append-only.\n\n"
     )
 
 def _render_run_log(state: Dict[str, Any]) -> str:
@@ -72,6 +74,7 @@ def _render_run_log(state: Dict[str, Any]) -> str:
         str(run.get("started_at", "")),
         str(run.get("status") or "RUNNING"),
     )
+    text += render_dashboard(state)
     for entry in state.get("log_entries", []):
         section = str(entry.get("section", "RUN")).strip() or "RUN"
         body = str(entry.get("text", "")).rstrip()
@@ -856,6 +859,7 @@ class StateStore:
             "candidates": {},
             "simulations": {},
             "run": None,
+            "dashboard_context": {"fields": [], "visualization": {}},
             "log_entries": [],
         }
 
@@ -868,6 +872,7 @@ class StateStore:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v1"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
+        state.setdefault("dashboard_context", {"fields": [], "visualization": {}})
 
         # Read-time compatibility enrichment for pre-v3.3 state snapshots.
         # These values are mechanically derivable and do not rewrite economic
@@ -959,6 +964,23 @@ class StateStore:
         log_path.write_text(_render_run_log(state), encoding="utf-8")
         return {"ok": True, "log_path": str(log_path), "log_created_or_recreated": created, "entry_count": len(state["log_entries"])}
 
+    def update_dashboard(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        state = self.read()
+        state, created = self._ensure_run_log(state)
+        try:
+            state["dashboard_context"] = enrich_context_with_charts(state, payload)
+        except ValueError as exc:
+            return {"ok": False, "reason": "DASHBOARD_CONTRACT", "detail": str(exc)}
+        self._write(state)
+        log_path = Path(state["run"]["log_path"])
+        log_path.write_text(_render_run_log(state), encoding="utf-8")
+        return {
+            "ok": True,
+            "log_path": str(log_path),
+            "log_created_or_recreated": created,
+            "dashboard_context": state["dashboard_context"],
+        }
+
     def _write(self, state: Dict[str, Any]) -> None:
         """Atomic compare-and-swap write.
 
@@ -1022,7 +1044,12 @@ class StateStore:
         state["optimization_plan_history"] = []
         state["allowed_fields"] = list(snapshot["fields"])
         state["allowed_field_evidence"] = {f: "ROOT" for f in snapshot["fields"]}
+        state["dashboard_context"] = {
+            "fields": [{"name": field} for field in snapshot["fields"]],
+            "visualization": {},
+        }
         self._write(state)
+        Path(state["run"]["log_path"]).write_text(_render_run_log(state), encoding="utf-8")
         return {"initialized": True, "already_initialized": False, "root_alpha_id": self.root_alpha_id, "incumbent_alpha_id": snapshot["alpha_id"], "allowed_fields": snapshot["fields"], "log_path": state["run"]["log_path"], "log_created_or_recreated": log_created}
 
     def refresh_incumbent_result(self, result_evidence: Dict[str, Any]) -> Dict[str, Any]:
@@ -1903,6 +1930,7 @@ class StateStore:
             "hypotheses": {k: v.get("status") for k, v in state.get("hypotheses", {}).items()},
             "simulation_states": {k: v.get("status") for k, v in state.get("simulations", {}).items()},
             "submission_readiness": _submission_readiness(state),
+            "dashboard_context": state.get("dashboard_context", {}),
         }
 
 
@@ -1945,6 +1973,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("start-run"); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("init"); p.add_argument("--baseline", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("append-log"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--section", required=True); p.add_argument("--text-file")
+    p = sub.add_parser("update-dashboard"); p.add_argument("--dashboard", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("status"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("register-evidence"); p.add_argument("--evidence", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("refresh-incumbent"); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
@@ -1970,6 +1999,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "start-run": out = start_run(args.root_alpha_id)
         elif args.cmd == "init": out = StateStore(args.state, args.root_alpha_id).initialize(_load_json_arg(args.baseline))
         elif args.cmd == "append-log": out = StateStore(args.state, args.root_alpha_id).append_log(args.section, _load_text_arg(args.text_file))
+        elif args.cmd == "update-dashboard": out = StateStore(args.state, args.root_alpha_id).update_dashboard(_load_json_arg(args.dashboard))
         elif args.cmd == "status": out = StateStore(args.state, args.root_alpha_id).summary()
         elif args.cmd == "register-evidence": out = StateStore(args.state, args.root_alpha_id).register_evidence(_load_json_arg(args.evidence))
         elif args.cmd == "refresh-incumbent": out = StateStore(args.state, args.root_alpha_id).refresh_incumbent_result(_load_json_arg(args.result))
