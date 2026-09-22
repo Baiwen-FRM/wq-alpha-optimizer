@@ -15,10 +15,7 @@ python3 scripts/optimizer_guard.py --help
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
 `set-plan --final-replan` is accepted only after all routes in the current plan
-are terminal and can be used once per Incumbent cycle. Root or a legitimate
-STALE re-profile may install an empty EXHAUSTED plan rather than fabricating a
-route. `refresh-incumbent` updates the current authenticated Result/check
-snapshot and stales an existing plan when facts change.
+are terminal and can be used once per Incumbent cycle. Root or a legitimate STALE re-profile may install an empty EXHAUSTED plan only after the v2 synthesis contract provides a complete auditable no-action proof; a missing or merely historical method review cannot create an empty plan. `refresh-incumbent` updates the current authenticated Result/check snapshot and stales an existing plan when facts change.
 
 `finish-run --status COMPLETED_WITH_EXHAUSTION` requires the final re-plan
 gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the current
@@ -30,6 +27,16 @@ Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经
 
 State mutation is single-writer. Concurrent/stale state snapshots are rejected with `STATE_WRITE_CONFLICT`; re-read the state and retry serially. This prevents evidence loss from overlapping Guard commands.
 
+
+## Evidence + method synthesis
+
+After mandatory intake evidence is registered, use:
+
+```text
+python3 scripts/mechanism_synthesis.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
+```
+
+The script only creates a deterministic blocker/method-family/evidence scaffold. It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required only when claiming an empty plan/exhaustion.
 
 ## Deterministic bootstrap
 
