@@ -17,12 +17,23 @@ BASE_RECORDSETS = {"pnl", "sharpe", "turnover", "daily-pnl", "yearly-stats"}
 
 def _load_wq_lib():
     try:
-        return importlib.import_module("wq_lib")
+        module = importlib.import_module("wq_lib")
     except ImportError as exc:
         raise RuntimeError(
             "wq_lib is not importable in this Python environment. "
             "Install/use the local WQ Lab environment before running the optimizer."
         ) from exc
+    required = (
+        "login", "get_result", "get_submission_check", "get_datafield",
+        "get_alpha_recordsets", "get_alpha_recordset", "get_prod_corr",
+        "get_self_corr", "get_operators", "simulate_single",
+    )
+    missing = [name for name in required if not callable(getattr(module, name, None))]
+    if missing:
+        raise RuntimeError(
+            "local wq_lib is missing required additive primitives: " + ", ".join(missing)
+        )
+    return module
 
 
 def _code(value: Any) -> str:
@@ -319,6 +330,8 @@ def _emit(data: Any, output: str | None = None) -> None:
         path = Path(output)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text + "\n", encoding="utf-8")
+        print(json.dumps({"ok": True, "output": str(path)}, ensure_ascii=False))
+        return
     print(text)
 
 
@@ -363,7 +376,8 @@ def main() -> None:
 
     args = parser.parse_args()
     wq = _load_wq_lib()
-    session = wq.login()
+    with contextlib.redirect_stdout(io.StringIO()):
+        session = wq.login()
 
     if args.cmd == "intake":
         root = root_snapshot(session, wq, args.alpha_id)
