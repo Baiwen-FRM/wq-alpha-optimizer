@@ -64,8 +64,8 @@ The provider layer uses one authenticated WQ Lab session and always performs the
 4. exact `get_datafield` for each used field and select the matching region/delay/universe coverage row;
 5. inspect existing Alpha recordsets;
 6. if no rich visualization recordsets are present, create one same-expression/same-settings diagnostic with only `visualization=true`;
-7. discover recordsets with a bounded fixed retry policy;
-8. fetch each discovered recordset as raw schema/records;
+7. discover recordsets with a bounded fixed retry policy and wait for the rich listing to stabilize when possible;
+8. fetch every recordset currently listed by BRAIN as raw schema/records; the count is platform-derived, not hard-coded;
 9. build deterministic dashboard field rows and chart specs.
 
 The bootstrap stores all three under `logs/.data/<run_id>/`: `intake.json` is raw evidence, `baseline.json` is only the Guard initialization projection, and `dashboard.json` is only the deterministic presentation projection. The lower-level provider CLI remains available for debugging/recovery but is not the normal controller path.
