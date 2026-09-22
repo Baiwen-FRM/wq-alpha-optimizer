@@ -644,13 +644,19 @@ def _normalize_synthesis(
                     )
                 evidence_rows = [state["evidence"][ref] for ref in refs]
                 if basis == "CURRENT_DIAGNOSTIC":
+                    expected_subjects = {
+                        mechanism,
+                        f"MECHANISM:{mechanism}",
+                    }
                     if not any(
                         str(row.get("kind", "")).upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
                         and str(row.get("source", "")).startswith("BRAIN:")
+                        and str(row.get("subject", "")) in expected_subjects
                         for row in evidence_rows
                     ):
                         raise ValueError(
-                            "CURRENT_DIAGNOSTIC exclusion requires BRAIN diagnostic-exclusion evidence"
+                            "CURRENT_DIAGNOSTIC exclusion requires mechanism-specific "
+                            "BRAIN diagnostic-exclusion evidence"
                         )
                 elif basis == "CURRENT_CANDIDATE_RESULT":
                     if not any(str(row.get("kind", "")).upper() == "CANDIDATE_RESULT" for row in evidence_rows):
@@ -662,6 +668,14 @@ def _normalize_synthesis(
                         raise ValueError("SCOPE_BOUNDARY exclusion requires SCOPE_BOUNDARY evidence")
                 normalized_item["exclusion_basis"] = basis
             assessments.append(normalized_item)
+
+        covered_method_families = {str(item.get("method_family")) for item in assessments}
+        missing_method_families = sorted(allowed_method_families - covered_method_families)
+        if missing_method_families:
+            raise ValueError(
+                f"synthesis blocker {name} missing method families: "
+                + ", ".join(missing_method_families)
+            )
 
         rows.append({
             "name": name,
@@ -677,6 +691,7 @@ def _normalize_synthesis(
             raise ValueError("synthesis missing current blockers: " + ", ".join(missing))
 
     return {
+        "catalog_version": _load_mechanism_catalog().get("version"),
         "incumbent_alpha_id": str((state.get("incumbent") or {}).get("alpha_id") or ""),
         "based_on_evidence_revision": based_on_evidence_revision,
         "blockers": rows,
