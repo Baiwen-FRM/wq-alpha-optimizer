@@ -555,6 +555,110 @@ class CoreGuardTests(TestCase):
         self.assertTrue(forced["ok"], forced)
 
 
+    def test_directional_improvement_can_promote_while_target_check_still_fails(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        self._open_hypothesis()
+        candidate = self._candidate()
+        reserved = self.store.reserve_simulation(candidate)
+        fp = reserved["fingerprint"]
+        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-PROGRESS")["ok"])
+        result = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-PROGRESS",
+                "simulation_id": "SIM-PROGRESS",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.1, "FITNESS": 1.55, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(result["status"], "SUPPORTED", result)
+        promoted = self.store.promote(candidate)
+        self.assertTrue(promoted["promoted"], promoted)
+        state = self.store.read()
+        self.assertEqual(state["incumbent"]["alpha_id"], "CHILD-PROGRESS")
+        self.assertEqual(state["incumbent"]["result_evidence"]["checks"][0]["status"], "FAIL")
+        self.assertEqual(state["optimization_plan"]["status"], "STALE")
+        log_text = Path(state["run"]["log_path"]).read_text(encoding="utf-8")
+        self.assertIn("**Current Incumbent:** CHILD-PROGRESS", log_text)
+        self.assertIn("### Optimization Progression", log_text)
+
+    def test_refuted_payload_does_not_automatically_exhaust_mechanism_route(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        self._open_hypothesis()
+        candidate = self._candidate()
+        reserved = self.store.reserve_simulation(candidate)
+        fp = reserved["fingerprint"]
+        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-REFUTED")["ok"])
+        result = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-REFUTED",
+                "simulation_id": "SIM-REFUTED",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 1.9, "FITNESS": 1.4, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(result["status"], "REFUTED", result)
+        state = self.store.read()
+        self.assertEqual(state["focus"]["status"], "OPEN")
+        self.assertEqual(state["optimization_plan"]["routes"][0]["status"], "ACTIVE")
+
+    def test_dashboard_is_rendered_at_top_and_writes_svg_visualization(self):
+        updated = self.store.update_dashboard(
+            {
+                "fields": [
+                    {
+                        "name": "close",
+                        "type": "MATRIX",
+                        "dataset": "pv1",
+                        "coverage": 1.0,
+                        "dateCoverage": 1.0,
+                        "description": "Closing price",
+                    }
+                ],
+                "visualization": {
+                    "alpha_id": "ROOT-VIS",
+                    "control": "same expression/settings; visualization=true",
+                    "recordsets": ["pnl", "sharpe-by-capitalization"],
+                    "summary": ["Capitalization buckets show dispersion."],
+                    "charts": [
+                        {
+                            "id": "cap-sharpe",
+                            "title": "Sharpe by capitalization bucket",
+                            "type": "bar",
+                            "labels": ["0-20", "20-40", "40-60", "60-80", "80-100"],
+                            "values": [1.28, 1.45, 0.35, 0.78, -0.22],
+                        }
+                    ],
+                },
+            }
+        )
+        self.assertTrue(updated["ok"], updated)
+        log_path = Path(updated["log_path"])
+        text = log_path.read_text(encoding="utf-8")
+        self.assertIn("## Alpha Snapshot / Dashboard", text)
+        self.assertIn("### 1. Expression + Settings", text)
+        self.assertIn("### 2. Result", text)
+        self.assertIn("### 3. Field Information", text)
+        self.assertIn("### 4. Visualization / Diagnostics", text)
+        self.assertIn("Closing price", text)
+        self.assertIn("![Sharpe by capitalization bucket](assets/", text)
+        self.assertLess(text.index("## Alpha Snapshot / Dashboard"), text.index("## Audit Trail"))
+        charts = self.store.read()["dashboard_context"]["visualization"]["charts"]
+        asset = log_path.parent / charts[0]["asset"]
+        self.assertTrue(asset.exists())
+        self.assertIn("<svg", asset.read_text(encoding="utf-8"))
+
     def test_stale_concurrent_state_write_is_rejected_without_data_loss(self):
         first = self.store.read()
         stale = self.store.read()

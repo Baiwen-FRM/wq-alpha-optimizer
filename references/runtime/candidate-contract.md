@@ -202,3 +202,11 @@ Guard 必须验证：
 `SUBMISSION_READY` 的要求更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；`PENDING/UNKNOWN` 等非终态也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。普通 `SUCCESS` 只表示 controller 判定用户目标已达到，不自动声称可提交。
 
 只有 guard 计算为 `SUPPORTED` 的 result 才能 promotion。`REFUTED / INCONCLUSIVE` 不能靠调用者改布尔值绕过。
+
+### Research progress is not submission readiness
+
+`success_criteria` 应描述当前 hypothesis 的**机制预测**，不是机械复制最终 submission threshold。对于修复型路线，如果假设预测“Sharpe 应提高且 Fitness 不明显下降”，那么 candidate 在 `LOW_SHARPE` 仍为 FAIL 的情况下也可以得到 `SUPPORTED`，只要预声明 metric criterion / protected metrics 成立且没有新的 blocking/unresolved check。此时 promotion 表示“成为新的研究 parent / Incumbent”，**不表示** blocker 已修复，也不表示 `SUBMISSION_READY`。
+
+只有当 hypothesis 本身有充分理由预测“这一步就应跨过当前 check threshold”时，才把 `check required_status=PASS` 作为 success criterion。不要把所有 repair hypothesis 都写成“一步过线”，否则会把有价值的中间改善错误地归为失败。
+
+`REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。它**不自动证明整个 route mechanism 已耗尽**。Controller 只有在剩余 same-mechanism questions 已有负证据、重复、或没有新的可证伪信息时才能 `exhaust-focus`。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。

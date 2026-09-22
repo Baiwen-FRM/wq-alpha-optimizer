@@ -2,6 +2,66 @@
 
 本文件只定义可读报告结构；run-log 生命周期与 machine state 分别按 `alpha-intake.md` 和 `candidate-contract.md` 执行，本文件不再定义它们。
 
+## MD 首页 Dashboard
+
+每个 canonical run MD 的最前面固定渲染一个由当前 machine state + dashboard metadata 生成的首页。Audit Trail 仍保持 append-only；Dashboard 可以随着 Incumbent、Result、field metadata、visualization evidence 更新而重绘。
+
+固定顺序：
+
+1. **Expression + Settings**
+   - 当前 Incumbent expression；
+   - 完整 settings 表。
+2. **Result**
+   - Root 与 Current Incumbent 的关键 metrics；若尚未 promotion，则显示单列 current value；
+   - 当前完整 checks 表。
+3. **Field Information**
+   - actual field name / type / dataset / coverage / dateCoverage / exact description。
+4. **Visualization / Diagnostics**
+   - diagnostic Alpha ID / control 说明；
+   - 实际取得的 recordset 名称；
+   - 关键摘要；
+   - 有可审计数值序列时生成轻量 SVG：ordered time/PnL 用 line，bucket/cap/sector/industry 对比用 bar；不补点、不平滑、不猜缺失值。
+5. **Optimization Progression**
+   - 已有 result 的 hypothesis / candidate Alpha / mechanism / status / Sharpe/Fitness/Returns/Margin/Turnover / new blockers。
+
+Dashboard 更新使用：
+
+```text
+python3 scripts/optimizer_guard.py update-dashboard --dashboard <json> --state <state.json> --root-alpha-id <ID>
+```
+
+最小 metadata 示例：
+
+```json
+{
+  "fields": [
+    {
+      "name": "mdl242_1mt",
+      "type": "MATRIX",
+      "dataset": "model242",
+      "coverage": 1.0,
+      "dateCoverage": 1.0,
+      "description": "Overall TM1 tactical composite alpha score for the D1 horizon"
+    }
+  ],
+  "visualization": {
+    "alpha_id": "wpZnAnQ5",
+    "control": "same expression/settings; visualization=true",
+    "recordsets": ["pnl", "sharpe-by-capitalization"],
+    "summary": ["Capitalization Sharpe shows a strong gradient."],
+    "charts": [
+      {
+        "id": "cap-sharpe",
+        "title": "Sharpe by capitalization bucket",
+        "type": "bar",
+        "labels": ["0-20", "20-40", "40-60", "60-80", "80-100"],
+        "values": [1.28, 1.45, 0.35, 0.78, -0.22]
+      }
+    ]
+  }
+}
+```
+
 ## ROOT
 
 ```text

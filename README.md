@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.3.2
+# wq-alpha-optimizer v3.4.0
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -51,3 +51,12 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - Robust/Sub-Universe failures escalate to targeted visualization/recordset diagnostics before structural or decay candidates when those diagnostics can distinguish the root cause;
 - prior-run negative evidence may prevent duplicate candidates only when Root identity and current material facts still match;
 - final logs must show which diagnostics were completed, reused, unavailable, or still unknown before exhaustion.
+
+
+## v3.4.0 progressive optimization + run dashboard
+
+- hypothesis support is explicitly separated from final submission-threshold passage: a safely improving candidate can become the new Incumbent even while the original blocker remains FAIL;
+- REFUTED applies to the frozen hypothesis/payload, not automatically to the whole mechanism family;
+- after promotion the plan becomes stale and the optimizer re-diagnoses from the improved Incumbent, enabling bounded stepwise progress without dense parameter scans;
+- every canonical run MD now opens with a live Dashboard: expression/settings, Result/checks, field metadata, visualization/recordsets, optional SVG charts, and candidate progression;
+- dashboard charts are generated with the Python standard library only and remain local under ignored run-log assets.

@@ -31,11 +31,15 @@ Numeric tuning 使用 `../runtime/anchors.md` 的可解释尺度。先做 mechan
 - 为通过一个 check 引入另一个 blocker；
 - 当前 Alpha 已 all-pass，却只是因为“还能更高”而继续搜索。
 
-## O6 — Confirmation and stop
+## O6 — Confirmation, progression and stop
 
-机制初步得到支持后，只允许足以验证稳定性的有限 confirmation；confirmation 不是重新打开参数搜索。当前 focus 已不能提出新的 evidence-supported falsifiable question 时，结束该 focus。
+机制初步得到支持后，优先 promotion 成新的 Incumbent，再基于新 Incumbent 的 fresh facts 决定是否还有同机制的下一步。允许的 refinement 必须回答**由上一结果产生的新问题**，例如确认改善是否来自 persistence 而非偶然单点；它不能只是“既然 10 更好，再试 11/12/13”。
 
-Metric improvement alone 不等于 robustness，也不等于必须继续优化。
+`SUPPORTED` 不等于最终 check 已 PASS；它允许一步步推进。`REFUTED` 也只否定当前 frozen payload/question，不能凭一次失败自动宣布整个 mechanism family 死亡。
+
+有限 confirmation 不是重新打开参数搜索。当前 focus 已不能提出新的 evidence-supported falsifiable question 时，结束该 focus。
+
+Metric improvement alone 不等于 robustness，也不等于必须继续优化；但一个满足预声明 success/protection contract 的中间改善也不能仅因为最终 threshold 尚未跨过而被当成无效信息。
 
 
 ## O7 — Route mechanism is a research boundary
