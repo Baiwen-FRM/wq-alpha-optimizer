@@ -72,10 +72,31 @@ class PlanningGuardTests(TestCase):
         )
         return evidence_id
 
+    def _blocker_for_route(self, target, owner):
+        if target == "SHARPE" and owner == "optimization/sharpe.md":
+            return "LOW_SHARPE"
+        if target == "LOW_SUB_UNIVERSE_SHARPE":
+            return "LOW_SUB_UNIVERSE_SHARPE"
+        if target == "TURNOVER":
+            return "HIGH_TURNOVER"
+        if target == "LOW_2Y_SHARPE":
+            return "LOW_2Y_SHARPE"
+        if target == "PROD_CORRELATION":
+            return "PROD_CORRELATION"
+        if target == "SELF_CORRELATION":
+            return "SELF_CORRELATION"
+        return next(iter(guard._current_blockers(self.store.read())), "LOW_SHARPE")
+
     def _plan(self, *routes):
-        return {
-            "based_on_evidence_revision": 2,
-            "routes": [
+        revision = self.store.read()["evidence_revision"]
+        plan_routes = []
+        synthesis_rows = {}
+        for route_id, target, owner, mechanism, refs, rationale in routes:
+            blocker = self._blocker_for_route(target, owner)
+            entry = guard._catalog_entry_for_blocker(blocker)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = f"A_{route_id}"
+            plan_routes.append(
                 {
                     "id": route_id,
                     "target": target,
@@ -83,9 +104,62 @@ class PlanningGuardTests(TestCase):
                     "mechanism": mechanism,
                     "evidence_refs": refs,
                     "rationale": rationale,
+                    "assessment_refs": [assessment_id],
                 }
-                for route_id, target, owner, mechanism, refs, rationale in routes
-            ],
+            )
+            row = synthesis_rows.setdefault(
+                blocker,
+                {
+                    "name": blocker,
+                    "target": target,
+                    "owner": owner,
+                    "observation_refs": list(refs),
+                    "mechanisms": [],
+                },
+            )
+            row["mechanisms"].append(
+                {
+                    "id": assessment_id,
+                    "mechanism": mechanism,
+                    "method_family": method_family,
+                    "status": "PLAUSIBLE_PROBE",
+                    "evidence_refs": list(refs),
+                    "reasoning": "Current evidence plus the owner method family justifies a falsifiable probe.",
+                    "next_question": "Does this mechanism improve the target without protected-metric damage?",
+                }
+            )
+
+        current_blockers = guard._current_blockers(self.store.read())
+        for blocker in current_blockers:
+            if blocker in synthesis_rows:
+                continue
+            entry = guard._catalog_entry_for_blocker(blocker)
+            evidence_ref = "E1" if "E1" in self.store.read()["evidence"] else next(iter(self.store.read()["evidence"]), None)
+            if not evidence_ref:
+                continue
+            mechanism = entry["mechanisms"][0]["id"]
+            synthesis_rows[blocker] = {
+                "name": blocker,
+                "target": entry["target"],
+                "owner": entry["owner"],
+                "observation_refs": [evidence_ref],
+                "mechanisms": [
+                    {
+                        "id": f"A_{blocker}_background",
+                        "mechanism": mechanism,
+                        "method_family": entry["mechanisms"][0]["method_family"],
+                        "status": "NEEDS_DIAGNOSTIC",
+                        "evidence_refs": [evidence_ref],
+                        "reasoning": "The current blocker remains unresolved while another route is planned.",
+                        "next_question": "What evidence would distinguish this blocker mechanism?",
+                    }
+                ],
+            }
+
+        return {
+            "based_on_evidence_revision": revision,
+            "synthesis": {"blockers": list(synthesis_rows.values())},
+            "routes": plan_routes,
         }
 
     def _open_focus(self, route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE"):
