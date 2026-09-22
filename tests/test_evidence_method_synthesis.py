@@ -226,30 +226,63 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
 
     def test_current_diagnostic_can_support_true_no_action_certificate(self):
         store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
-        ref = self._evidence(
-            store,
-            "E_EXCLUDE",
-            "DIAGNOSTIC_EXCLUSION",
-            "LOW_SHARPE",
-            "Current targeted diagnostics falsify every remaining in-scope Sharpe mechanism.",
-        )
         entry = guard._catalog_entry_for_blocker("LOW_SHARPE")
-        mechanisms = [
-            self._assessment(
-                f"A_EX_{index}",
+        mechanisms = []
+        refs = []
+        for index, item in enumerate(entry["mechanisms"], start=1):
+            ref = self._evidence(
+                store,
+                f"E_EXCLUDE_{index}",
+                "DIAGNOSTIC_EXCLUSION",
                 item["id"],
-                item["method_family"],
-                "EXCLUDED",
-                [ref],
-                exclusion_basis="CURRENT_DIAGNOSTIC",
+                f"Current targeted diagnostic falsifies mechanism {item['id']}.",
             )
-            for index, item in enumerate(entry["mechanisms"], start=1)
-        ]
+            refs.append(ref)
+            mechanisms.append(
+                self._assessment(
+                    f"A_EX_{index}",
+                    item["id"],
+                    item["method_family"],
+                    "EXCLUDED",
+                    [ref],
+                    exclusion_basis="CURRENT_DIAGNOSTIC",
+                )
+            )
         accepted = store.set_plan(
-            self._plan(store, [self._blocker_row("LOW_SHARPE", mechanisms, [ref])], [])
+            self._plan(store, [self._blocker_row("LOW_SHARPE", mechanisms, refs)], [])
         )
         self.assertTrue(accepted["ok"], accepted)
         self.assertEqual(accepted["plan"]["status"], "EXHAUSTED")
+
+    def test_empty_plan_must_assess_entire_method_space(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        ref = self._evidence(
+            store,
+            "E_ONE_EXCLUSION",
+            "DIAGNOSTIC_EXCLUSION",
+            "noise_persistence_mismatch",
+            "Current targeted diagnostic excludes only the persistence mechanism.",
+        )
+        row = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_ONLY_ONE",
+                    "noise_persistence_mismatch",
+                    "temporal_aggregation_or_smoothing",
+                    "EXCLUDED",
+                    [ref],
+                    exclusion_basis="CURRENT_DIAGNOSTIC",
+                )
+            ],
+            [ref],
+        )
+        rejected = store.set_plan(self._plan(store, [row], []))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "EMPTY_PLAN_METHOD_SPACE_UNASSESSED")
+        missing = rejected["blockers"][0]["missing_method_families"]
+        self.assertIn("grouping_or_neutralization", missing)
+        self.assertIn("ts_rank_delta_or_timing", missing)
 
     def test_cap_sharpe_dispersion_and_subuniverse_blocker_form_targeted_route(self):
         store = self._store([{"name": "LOW_SUB_UNIVERSE_SHARPE", "status": "FAIL"}])
