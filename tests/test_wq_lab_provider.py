@@ -116,6 +116,38 @@ class WQLabProviderTests(TestCase):
         self.assertFalse(baseline["result_evidence"]["response_complete"])
         self.assertIn("checks_fallback", baseline["result_evidence"]["source"])
 
+    def test_recordset_discovery_waits_for_stable_complete_listing(self):
+        class FakeWQ:
+            calls = 0
+
+            @classmethod
+            def get_alpha_recordsets(cls, session, alpha_id):
+                cls.calls += 1
+                if cls.calls == 1:
+                    names = ["pnl", "sharpe-by-cap"]
+                else:
+                    names = [
+                        "pnl", "daily-pnl", "yearly-stats", "coverage",
+                        "coverage-by-industry", "coverage-by-sector",
+                        "average-size-by-industry", "average-size-by-sector",
+                        "average-size-by-cap", "pnl-by-industry",
+                        "pnl-by-sector", "pnl-by-cap", "sharpe-by-industry",
+                        "sharpe-by-sector", "sharpe-by-cap",
+                        "average-value-by-industry", "average-value-by-sector",
+                        "turnover", "sharpe",
+                    ]
+                return {
+                    "count": len(names),
+                    "results": [{"name": name, "title": name} for name in names],
+                }
+
+        listing, names = provider._discover_recordsets(
+            object(), FakeWQ, "VIS1", attempts=4, sleep_seconds=0
+        )
+        self.assertEqual(len(names), 19)
+        self.assertEqual(listing["count"], 19)
+        self.assertGreaterEqual(FakeWQ.calls, 3)
+
     def test_visualization_snapshot_reuses_rich_root_recordsets_without_post(self):
         class FakeWQ:
             simulate_calls = 0
