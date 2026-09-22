@@ -28,7 +28,7 @@ python3 scripts/mechanism_synthesis.py \
   --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The scaffold lists the current blockers, their canonical owners/method families from `mechanism-catalog.json`, and the evidence currently available. The controller fills the assessments; the script does not guess economics.
+The scaffold puts the current intake context and method space in one object: current Incumbent expression/settings/result evidence, fixed Dashboard field/visualization context, the raw intake path when present, current blockers, canonical owners/method families from `mechanism-catalog.json`, and the evidence registry. The controller fills the assessments; the script does not guess economics.
 
 ## Assessment states
 
