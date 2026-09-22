@@ -645,6 +645,120 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(rejected["reason"], "EMPTY_PLAN_DIAGNOSTIC_REQUIRED")
 
 
+    def test_nonempty_plan_does_not_require_full_method_catalog_enumeration(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        ref = self._evidence(
+            store,
+            "E_NOISE",
+            "DIAGNOSTIC",
+            "LOW_SHARPE",
+            "The current signal is plausibly too noisy for its intended horizon.",
+        )
+        row = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_NOISE_ONLY",
+                    "noise_persistence_question",
+                    "temporal_aggregation_or_smoothing",
+                    "PLAUSIBLE_PROBE",
+                    [ref],
+                )
+            ],
+            [ref],
+        )
+        route = {
+            "id": "R_NOISE",
+            "target": "SHARPE",
+            "owner": "optimization/sharpe.md",
+            "mechanism": "noise_persistence_question",
+            "evidence_refs": [ref],
+            "assessment_refs": ["A_NOISE_ONLY"],
+            "rationale": "Run one bounded persistence/noise discriminator before considering other families.",
+        }
+        accepted = store.set_plan(self._plan(store, [row], [route]))
+        self.assertTrue(accepted["ok"], accepted)
+        self.assertTrue(accepted["must_continue"])
+        self.assertEqual(accepted["active_route_id"], "R_NOISE")
+
+    def test_final_replan_empty_plan_still_requires_full_no_action_proof(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        root_ref = self._evidence(
+            store,
+            "E_ROUTE",
+            "DIAGNOSTIC",
+            "LOW_SHARPE",
+            "A bounded persistence/noise probe is justified.",
+        )
+        initial_row = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_ROUTE",
+                    "noise_persistence_question",
+                    "temporal_aggregation_or_smoothing",
+                    "PLAUSIBLE_PROBE",
+                    [root_ref],
+                )
+            ],
+            [root_ref],
+        )
+        route = {
+            "id": "R1",
+            "target": "SHARPE",
+            "owner": "optimization/sharpe.md",
+            "mechanism": "noise_persistence_question",
+            "evidence_refs": [root_ref],
+            "assessment_refs": ["A_ROUTE"],
+            "rationale": "Test one bounded persistence/noise question.",
+        }
+        planned = store.set_plan(self._plan(store, [initial_row], [route]))
+        self.assertTrue(planned["ok"], planned)
+
+        close_ref = self._evidence(
+            store,
+            "E_ROUTE_INVALIDATED",
+            "ROUTE_DIAGNOSTIC",
+            "noise_persistence_question",
+            "A new targeted diagnostic invalidates the active persistence/noise question.",
+        )
+        closed = store.close_route(
+            "R1",
+            "COMPLETED",
+            "New evidence removed the route's actionability.",
+            close_ref,
+        )
+        self.assertTrue(closed["ok"], closed)
+
+        one_exclusion = self._evidence(
+            store,
+            "E_ONLY_ONE_FAMILY",
+            "DIAGNOSTIC_EXCLUSION",
+            "noise_persistence_mismatch",
+            "Current targeted evidence excludes only the persistence family.",
+        )
+        partial = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_PARTIAL_FINAL",
+                    "noise_persistence_mismatch",
+                    "temporal_aggregation_or_smoothing",
+                    "EXCLUDED",
+                    [one_exclusion],
+                    exclusion_basis="CURRENT_DIAGNOSTIC",
+                )
+            ],
+            [one_exclusion],
+        )
+        rejected = store.set_plan(
+            self._plan(store, [partial], []),
+            final_replan=True,
+        )
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "EMPTY_PLAN_METHOD_SPACE_UNASSESSED")
+
+
 if __name__ == "__main__":
     import unittest
 
