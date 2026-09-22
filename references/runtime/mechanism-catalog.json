@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "blockers": {
     "LOW_SHARPE": {
       "target": "SHARPE",
@@ -102,6 +102,10 @@
         {
           "id": "group_exposure_mismatch",
           "method_family": "grouping_or_neutralization"
+        },
+        {
+          "id": "targeted_investability_gate",
+          "method_family": "targeted_liquidity_or_investability_gate"
         }
       ]
     },
@@ -128,6 +132,10 @@
         {
           "id": "group_exposure_mismatch",
           "method_family": "grouping_or_neutralization"
+        },
+        {
+          "id": "targeted_investability_gate",
+          "method_family": "targeted_liquidity_or_investability_gate"
         }
       ]
     },
@@ -158,6 +166,18 @@
         {
           "id": "settings_driven_turnover",
           "method_family": "single_decay_setting"
+        },
+        {
+          "id": "information_innovation_representation",
+          "method_family": "delta_surprise_or_revision_representation"
+        },
+        {
+          "id": "direct_target_tvr_control",
+          "method_family": "verified_target_tvr_control"
+        },
+        {
+          "id": "position_change_limit",
+          "method_family": "verified_delta_or_position_change_limit"
         }
       ]
     },
@@ -224,6 +244,10 @@
         {
           "id": "distribution_similarity",
           "method_family": "distribution_or_tail_reweighting"
+        },
+        {
+          "id": "temporal_operator_structure",
+          "method_family": "temporal_or_operator_structure_change"
         }
       ]
     },
@@ -246,6 +270,10 @@
         {
           "id": "distribution_similarity",
           "method_family": "distribution_or_tail_reweighting"
+        },
+        {
+          "id": "temporal_operator_structure",
+          "method_family": "temporal_or_operator_structure_change"
         }
       ]
     },
@@ -268,6 +296,14 @@
         {
           "id": "simulation_weighting",
           "method_family": "verified_truncation_or_weight_control"
+        },
+        {
+          "id": "normalization_issue",
+          "method_family": "scale_or_normalization"
+        },
+        {
+          "id": "temporal_sparsity_or_persistence",
+          "method_family": "temporal_persistence_or_change_control"
         }
       ]
     },
@@ -290,6 +326,14 @@
         {
           "id": "simulation_weighting",
           "method_family": "verified_truncation_or_weight_control"
+        },
+        {
+          "id": "normalization_issue",
+          "method_family": "scale_or_normalization"
+        },
+        {
+          "id": "temporal_sparsity_or_persistence",
+          "method_family": "temporal_persistence_or_change_control"
         }
       ]
     },
@@ -320,6 +364,90 @@
         {
           "id": "nan_intersection",
           "method_family": "thesis_consistent_missing_logic"
+        }
+      ]
+    },
+    "LOW_RETURNS": {
+      "target": "RETURNS",
+      "owner": "optimization/fitness.md",
+      "mechanisms": [
+        {
+          "id": "same_thesis_return_weakness",
+          "method_family": "same_thesis_structural_design"
+        }
+      ]
+    },
+    "LOW_MARGIN": {
+      "target": "MARGIN",
+      "owner": "optimization/margin-weight.md",
+      "mechanisms": [
+        {
+          "id": "excess_trading_or_timing",
+          "method_family": "route_to_turnover"
+        },
+        {
+          "id": "liquidity_investability_weakness",
+          "method_family": "route_to_robust_universe"
+        },
+        {
+          "id": "concentration_or_tail_inefficiency",
+          "method_family": "tail_or_weight_efficiency_control"
+        },
+        {
+          "id": "predictive_efficiency_weakness",
+          "method_family": "same_thesis_structural_design"
+        }
+      ]
+    },
+    "IS_LADDER_SHARPE": {
+      "target": "IS_LADDER_SHARPE",
+      "owner": "optimization/is-ladder.md",
+      "mechanisms": [
+        {
+          "id": "time_window_dependence",
+          "method_family": "horizon_or_temporal_representation"
+        },
+        {
+          "id": "data_quality_or_field_change",
+          "method_family": "data_quality_diagnosis"
+        },
+        {
+          "id": "tail_period_concentration",
+          "method_family": "tail_or_distribution_control"
+        },
+        {
+          "id": "same_thesis_structural_instability",
+          "method_family": "same_thesis_structural_repair"
+        }
+      ]
+    },
+    "INVESTABILITY": {
+      "target": "INVESTABILITY",
+      "owner": "optimization/robust-universe.md",
+      "mechanisms": [
+        {
+          "id": "liquidity_bucket_weakness",
+          "method_family": "liquidity_or_investability_exposure_control"
+        },
+        {
+          "id": "coverage_weakness",
+          "method_family": "data_quality_or_coverage_repair"
+        },
+        {
+          "id": "tail_distribution_fragility",
+          "method_family": "tail_or_distribution_control"
+        },
+        {
+          "id": "persistence_mismatch",
+          "method_family": "temporal_persistence"
+        },
+        {
+          "id": "group_exposure_mismatch",
+          "method_family": "grouping_or_neutralization"
+        },
+        {
+          "id": "targeted_bad_subset",
+          "method_family": "targeted_liquidity_or_investability_gate"
         }
       ]
     }
