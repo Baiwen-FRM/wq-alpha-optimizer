@@ -90,6 +90,19 @@ Promotion 或 current-result refresh 会把旧 plan 标记 `STALE`。Root 第一
 
 当前 plan 的 routes 全部 terminal 后，controller 只能执行一次 `final-replan`；同一 Incumbent cycle 不得继承已消耗的 final re-plan，新 Incumbent 会开启新的 cycle。没有 OPEN hypothesis、OPEN focus、ACTIVE/PENDING route 且 final re-plan 为空时，guard 才允许 `COMPLETED_WITH_EXHAUSTION`；`SUCCESS/SUBMISSION_READY` 在没有 OPEN hypothesis/focus 时可以结束已因 promotion 变成 `STALE` 的旧 plan。
 
+### Route closure evidence gate
+
+Route 被计划成 `ACTIVE` 就意味着 controller 当时判断它是 actionable。为了防止“刚建 route 就用同一批旧事实把它判死”，guard 记录 `activated_at_evidence_revision`，并把 hypothesis/candidate 绑定到 `route_id`。
+
+ACTIVE route 的正常 terminal transition 需要满足至少一个条件：
+
+- 该 route 已产生至少一个 **evaluated candidate Result**；或
+- 没有 candidate Result，但 controller 提供一个显式 `evidence_ref`，该 evidence 的 revision 必须晚于 route activation，而且 informational fingerprint 在 activation 之前不存在。
+
+第二种是 diagnostic invalidation 例外，不是“跳过 candidate”的常规捷径。它用于 route 激活后出现的新 cap/sector/industry/coverage/schema/平台事实真正让原问题失去 actionability。planning 时已经存在的 blocker、历史实验摘要、旧 recordset、重复 ID、只换 timestamp 的 evidence 都不满足。
+
+`close-route` 与 `exhaust-focus` 都执行这个 gate；`COMPLETED_WITH_EXHAUSTION` 还会重新审计当前 Incumbent cycle 的 terminal route history，防止旧状态或绕路留下零-work route 后直接 final-replan 结束。
+
 `run.status` 进入 `SUCCESS`、`SUBMISSION_READY`、`COMPLETED_WITH_EXHAUSTION`、`USER_STOP`、`SCOPE_BOUNDARY` 或 `PLATFORM_UNRECOVERABLE` 后是 terminal boundary；所有 research-state mutation 都拒绝并返回 `RUN_ALREADY_TERMINAL`。`append_log` 只追加最终人工说明，不改变研究状态，因此仍可使用。
 
 其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求当前 Incumbent snapshot 的 authenticated/complete/auditable checks 无 blocking 或 unresolved 项。
