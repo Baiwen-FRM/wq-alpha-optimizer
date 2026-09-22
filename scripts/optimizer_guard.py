@@ -1320,7 +1320,21 @@ class StateStore:
         state["planning_contract"] = "v1"
         state["optimization_plan"] = normalized
         self._write(state)
-        return {"ok": True, "plan": normalized}
+        if routes:
+            active_route = next((route for route in routes if route.get("status") == "ACTIVE"), None)
+            return {
+                "ok": True,
+                "plan": normalized,
+                "must_continue": True,
+                "next_required_action": "SET_FOCUS",
+                "active_route_id": (active_route or {}).get("id"),
+            }
+        return {
+            "ok": True,
+            "plan": normalized,
+            "must_continue": False,
+            "next_required_action": "FINAL_REPLAN_OR_TERMINAL",
+        }
 
     def activate_route(self, route_id: str) -> Dict[str, Any]:
         if not route_id.strip():
