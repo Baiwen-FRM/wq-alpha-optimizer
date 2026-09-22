@@ -2,28 +2,25 @@
 
 目标是取得**足以定位当前 mechanism 的证据**，不是机械跑满所有诊断。用户可读证据只追加到本次 run 的 canonical log；machine state 由 guard 独立维护。
 
-## Stage 0 — RUN START / DETERMINISTIC BOOTSTRAP
+## Stage 0 — LEAN ROOT BOOTSTRAP
 
-收到并接受一个现有 Alpha ID 后，正常路径只运行一个入口：
+收到并接受一个现有 Alpha ID 后，正常路径只运行：
 
 ```text
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-该脚本负责固定顺序完成：
+Bootstrap 只做优化真正开始前不可缺少的 Root intake：
 
-1. 本地 WQ Lab capability preflight（不访问 BRAIN）；
-2. 创建本次 canonical run MD/state；
-3. 通过本地 WQ Lab 取得 Root details / checks / exact used-field metadata；
-4. 检查现有 recordsets；必要时只创建一个 same-expression / same-settings / `visualization=true` diagnostic control；
-5. 有界发现并读取 raw recordsets；
-6. 把完整 intake 保存到本次 `logs/.data/<run_id>/`；
-7. 用 baseline projection 初始化 Guard；
-8. 用 dashboard projection 更新同一个 canonical MD 首页。
+1. 本地 WQ Lab capability preflight；
+2. 创建 canonical run MD/state；
+3. 取得当前 Alpha expression/settings/Result/submission checks；
+4. 对 expression 实际使用的 fields 做 exact metadata lookup；
+5. 初始化 Guard 并更新固定 Dashboard。
 
-Controller **不得**在正常路径上手工重排这些步骤，也不得把它拆回 `start-run → provider intake → init → update-dashboard` 四段自由编排。低层命令只用于调试/恢复。
+**这里不做** visualization POST、recordset sweep、correlation、历史大范围检索、operator 全表核对或 candidate simulation。Bootstrap 返回 `READY_FOR_OPTIMIZATION` 后立即进入 ROOT/DIAGNOSE/PLAN，并在存在 actionable route 时继续到 candidate；不得把 bootstrap/Profile/Plan 当成用户请求的完成点。
 
-Bootstrap 返回 `READY_FOR_DIAGNOSIS` 后才进入 Stage A/B。若本地 WQ Lab capability preflight 失败，不创建 run；若认证/BRAIN intake 在 run 创建后失败，记录 BOOTSTRAP failure 并停止，不静默改用 CNHKMCP。
+正常运行产生的 runtime artifact 必须留在本 Skill 的 `logs/` 下。不要为了串 CLI 在 `/private/tmp` 或项目外生成一组 evidence/baseline/dashboard 临时文件。
 
 ## Stage A — ROOT
 
@@ -50,7 +47,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 区分平台事实、结构推断、未证实假设。字段名不能代替字段语义；field description 应参与 expression node → idea role 的解释，但 description 本身不证明 PIT、lag、update cadence、unit 或 missing semantics。
 
-只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Dashboard intake 会固定尝试取得 visualization recordsets；这些 recordsets 是信息面，不会因为“已经画出来”就自动成为 candidate evidence。只有能区分机制的部分才注册为 routing evidence。
+只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Visualization/recordsets 是**按需诊断**，不是每次 Root intake 的固定成本；只有当当前 blocker/mechanism 需要这些信息才能区分下一步时才调用 `visualization-snapshot`。取得后也只有能区分机制的部分才注册为 routing evidence。
 
 **Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
 
@@ -74,6 +71,7 @@ expression node → operator/transformation → field → dataset → idea role
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
 - Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
 - 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 仍为空才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
+- **建立 plan 后不得停。** 如果 plan 中存在 `ACTIVE` route，则立即进入 FOCUS/HYPOTHESIS/CANDIDATE。除非用户明确只要求审计/诊断，或平台不可继续，否则“计划已固化，下一步将继续”不是合法 closeout。
 
 ## Stage D — FOCUS
 
@@ -100,7 +98,7 @@ ENHANCEMENT 不是无限优化许可，也不能用来绕过已有 FAIL blocker�
 
 本阶段只负责顺序：**先冻结 hypothesis，再生成 candidate，再做 live operator/schema 检查，再 preflight/reserve**。所有字段、允许的 mutation、field/complexity 约束、payload binding 与 transport 行为只以 `candidate-contract.md` 为准；本文件不重复定义。
 
-若 candidate 引入或改变 operator family、GROUP/VECTOR 参数角色、named argument 或其它可能受 live signature 影响的结构，在 reserve/POST 前用当前 `get_operators()` 定义核对名称、arity/type/NaN 语义，并把能驱动决定的结论注册为 evidence。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
+先生成明确的 candidate 结构，再判断是否需要 live operator/schema 核对。只有 candidate **引入或改变** operator family、GROUP/VECTOR 参数角色、named argument 或其它 signature-sensitive 结构时，才在 reserve/POST 前用当前 `get_operators()` 核对名称、arity/type/NaN 语义。仅仅“存在 active route”不是做 operator 全表核对的理由。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
 
 Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。
 
