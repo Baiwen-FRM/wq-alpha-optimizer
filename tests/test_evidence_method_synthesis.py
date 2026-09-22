@@ -114,6 +114,11 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
         self._evidence(store, "E_SHARPE", "DIAGNOSTIC", "LOW_SHARPE", "Sharpe is below the current limit.")
         scaffold = mechanism_synthesis.build_synthesis_scaffold(store.read())
+        self.assertEqual(scaffold["context"]["expression"], "ts_mean(close, 10)")
+        self.assertEqual(scaffold["context"]["settings"]["region"], "GBR")
+        self.assertEqual(scaffold["context"]["result_evidence"]["checks"][0]["name"], "LOW_SHARPE")
+        self.assertEqual(scaffold["context"]["fields"], [])
+        self.assertEqual(scaffold["context"]["visualization"], {})
         self.assertEqual([row["name"] for row in scaffold["blockers"]], ["LOW_SHARPE"])
         methods = {row["method_family"] for row in scaffold["blockers"][0]["mechanisms"]}
         self.assertIn("temporal_aggregation_or_smoothing", methods)
