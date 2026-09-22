@@ -200,6 +200,20 @@ Success criterion 允许：
 
 metric success criterion 的 `min_change` 与 protected metric 的 `tolerance` 都必须在 simulation 前声明；不能看完结果后补。需要 field change 或 complexity growth 时，理由也必须在 hypothesis contract 中预声明。
 
+### Preflight correction before reservation
+
+冻结 hypothesis 后、第一次 candidate reserve 前，preflight 仍可能发现合同本身不完整，例如 candidate 增加了 expression complexity，但 hypothesis 忘记声明 `complexity_reason`。这种错误不能要求伪造 transport failure，也不能手改 state。
+
+若 hypothesis 仍为 `OPEN`，且：
+
+- `candidate_fingerprint` 仍为 null；
+- 没有任何 simulation/candidate record 绑定该 hypothesis；
+- 当前 focus 仍 OPEN 且 revision 一致；
+
+可以执行 `withdraw-hypothesis --reason ...`。Guard 将旧 hypothesis 记为 `WITHDRAWN / WITHDRAWN_BEFORE_RESERVATION`，保留审计记录；随后必须使用**新的 hypothesis ID**重新冻结修正后的 contract。
+
+一旦 reserve 已发生，hypothesis 就已经绑定 payload fingerprint，即使 reservation 后来被 `RELEASED`，也不能使用 `withdraw-hypothesis` 修改合同。此时继续遵守 transport recovery / release / abandon 规则，避免 post-reservation contract rewriting。
+
 ## 6. Candidate JSON
 
 Candidate 只引用 frozen hypothesis，不再重复 hypothesis 文本：
