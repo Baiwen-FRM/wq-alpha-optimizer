@@ -121,6 +121,51 @@ class CoreGuardTests(TestCase):
             plan["routes"][0]["assessment_refs"] = [assessment_id]
         return store.set_plan(plan)
 
+    def _no_action_plan(self, store=None, *, evidence_id="E_NO_ACTION"):
+        store = store or self.store
+        state = store.read()
+        if evidence_id not in state["evidence"]:
+            self._register(
+                store,
+                evidence_id,
+                "DIAGNOSTIC_EXCLUSION",
+                "NO_ACTION",
+                "BRAIN:test_diagnostic",
+                "Current diagnostic evidence excludes the remaining in-scope mechanism families for this test.",
+                observed_at=guard._now_iso(),
+            )
+            state = store.read()
+        blockers = guard._current_blockers(state)
+        rows = []
+        for blocker in blockers:
+            entry = guard._catalog_entry_for_blocker(blocker)
+            rows.append(
+                {
+                    "name": blocker,
+                    "target": entry["target"],
+                    "owner": entry["owner"],
+                    "observation_refs": [evidence_id],
+                    "mechanisms": [
+                        {
+                            "id": f"X_{blocker}_{index}",
+                            "mechanism": item["id"],
+                            "method_family": item["method_family"],
+                            "status": "EXCLUDED",
+                            "evidence_refs": [evidence_id],
+                            "reasoning": "Current diagnostic evidence excludes this mechanism for the test state.",
+                            "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                            "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                        }
+                        for index, item in enumerate(entry["mechanisms"], start=1)
+                    ],
+                }
+            )
+        return {
+            "based_on_evidence_revision": store.read()["evidence_revision"],
+            "synthesis": {"blockers": rows},
+            "routes": [],
+        }
+
     def _open_focus(self, store=None, *, mechanism="signal_quality"):
         store = store or self.store
         result = store.set_focus(
@@ -409,9 +454,9 @@ class CoreGuardTests(TestCase):
         self.assertIn("protected_metric:FITNESS", result["evaluation"]["missing"])
 
     def test_same_incumbent_stale_empty_reprofile_preserves_final_replan_usage(self):
-        empty = self.store.set_plan({"routes": []})
+        empty = self.store.set_plan(self._no_action_plan())
         self.assertTrue(empty["ok"], empty)
-        final = self.store.set_plan({"routes": []}, final_replan=True)
+        final = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_FINAL"), final_replan=True)
         self.assertTrue(final["ok"], final)
         self.assertTrue(final["plan"]["final_replan_used"])
 
@@ -427,7 +472,7 @@ class CoreGuardTests(TestCase):
             }
         )
         self.assertEqual(refreshed["plan_status"], "STALE")
-        replacement = self.store.set_plan({"routes": []})
+        replacement = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_REFRESH"))
         self.assertTrue(replacement["ok"], replacement)
         self.assertTrue(replacement["plan"]["final_replan_used"])
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Fresh re-profile still found no justified route.")
