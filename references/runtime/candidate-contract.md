@@ -239,16 +239,28 @@ Candidate 只引用 frozen hypothesis，不再重复 hypothesis 文本：
 
 ## 7. Transport
 
+正常路径由 `scripts/execute_reserved_candidate.py` 统一执行：
+
 ```text
 NEW/RELEASED/HTTP_429 --reserve--> RESERVED
-RESERVED → POSTED
-RESERVED → HTTP_429 --bounded retry--> RESERVED
-RESERVED → AMBIGUOUS_POST → POSTED(recovered existing simulation only)
-RESERVED --release(no POST confirmed)--> RELEASED --same fingerprint only--> RESERVED
-POSTED → terminal
+RESERVED --begin-submission--> SUBMITTING
+SUBMITTING → POSTED(confirmed 201 + Location)
+SUBMITTING → HTTP_429 --later reserve--> RESERVED
+SUBMITTING → AMBIGUOUS_POST
+SUBMITTING --explicit no-POST response--> RELEASED
+AMBIGUOUS_POST → POSTED(reconciled existing Location only)
+POSTED --Location resume only--> result / resumable polling
 ```
 
-非法 state transition 必须拒绝。`POSTED` 不能重新打开；`AMBIGUOUS_POST` 不能转 429 再 reserve。
+`SUBMITTING` 是 crash-safety fence：它必须在调用外部 POST 之前写入 state。若进程在 POST 周围崩溃，下一次 executor 看到 `SUBMITTING` 时不得自动 POST；只有拿到已存在 simulation 的 Location 才能用 `--recover-location` 绑定为 `POSTED`。这宁可产生 reconciliation requirement，也不能冒 duplicate POST 风险。
+
+WQ Lab 已有 `_start_simulation` 只负责一次受控 submission 并立即返回 HTTP response/Location；Skill 不复制 BRAIN HTTP。201+Location 一旦返回，Guard 立即持久化 Location，然后后续全部通过 WQ Lab `simulate_single(..., location=...)` 续跑，因此 poll 异常、result/check 暂时不完整、controller 重启都不会重新提交。
+
+旧 controller 直接在 RESERVED 后记录 `POSTED/HTTP_429/AMBIGUOUS_POST` 的 bookkeeping transition 为兼容保留，但正常 Skill execution 不使用该捷径。
+
+显式 pre-POST 4xx 且没有 Location 时可以 release，并用 `TRANSPORT_FAILURE` evidence 把 hypothesis 记为 pre-POST `INCONCLUSIVE`。POST 已确认后若 simulation terminal error/cancelled 且没有可用 Alpha result，则使用 `SIMULATION_FAILURE` evidence 记为 `POSTED_SIMULATION_FAILURE / INCONCLUSIVE`；不能伪造 performance Result。
+
+非法 state transition 必须拒绝。`POSTED` 不能重新打开；`AMBIGUOUS_POST` 不能自动转 429/re-reserve。
 
 ## 8. Result evidence / promotion
 
