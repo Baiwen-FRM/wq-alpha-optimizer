@@ -11,23 +11,6 @@ import optimizer_guard as guard
 import wq_lab_provider as provider
 
 
-def _json_default(value: Any):
-    if hasattr(value, "to_dict"):
-        try:
-            return value.to_dict(orient="records")
-        except TypeError:
-            return value.to_dict()
-    return str(value)
-
-
-def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
-
-
 def _append_bootstrap_note(store: guard.StateStore, *, status: str, detail: str) -> None:
     store.append_log(
         "BOOTSTRAP",
@@ -35,14 +18,8 @@ def _append_bootstrap_note(store: guard.StateStore, *, status: str, detail: str)
     )
 
 
-def bootstrap_run(
-    alpha_id: str,
-    *,
-    discovery_attempts: int = 4,
-    discovery_sleep_seconds: float = 2.0,
-) -> dict[str, Any]:
-    # Local compatibility check is allowed before the run starts because it
-    # performs no BRAIN I/O.
+def bootstrap_run(alpha_id: str) -> dict[str, Any]:
+    # Capability preflight is local-only and must not create a run on setup errors.
     try:
         provider._load_wq_lib()
     except Exception as exc:
@@ -62,42 +39,18 @@ def bootstrap_run(
     run_id = str(started["run_id"])
     store = guard.StateStore(state_path, alpha_id)
 
-    data_dir = log_path.parent / ".data" / run_id
-    raw_path = data_dir / "intake.json"
-    baseline_path = data_dir / "baseline.json"
-    dashboard_path = data_dir / "dashboard.json"
-
     try:
+        # Root bootstrap is intentionally lean: current Alpha facts, checks and
+        # exact metadata for fields actually used by the expression. No
+        # visualization POST, recordset sweep, correlation call or candidate
+        # simulation belongs here.
         with contextlib.redirect_stdout(io.StringIO()):
-            intake = provider.intake_snapshot(
-                alpha_id,
-                discovery_attempts=discovery_attempts,
-                discovery_sleep_seconds=discovery_sleep_seconds,
-            )
+            intake = provider.root_intake_snapshot(alpha_id)
     except Exception as exc:
-        _append_bootstrap_note(store, status="FAILED", detail=f"WQ Lab intake failed: {exc}")
+        _append_bootstrap_note(store, status="FAILED", detail=f"WQ Lab Root intake failed: {exc}")
         return {
             "ok": False,
-            "stage": "WQ_LAB_INTAKE",
-            "run_id": run_id,
-            "state_path": str(state_path),
-            "log_path": str(log_path),
-            "error": str(exc),
-        }
-
-    raw_evidence = {
-        "root": intake.get("root"),
-        "visualization": intake.get("visualization"),
-    }
-    try:
-        _write_json(raw_path, raw_evidence)
-        _write_json(baseline_path, intake.get("baseline"))
-        _write_json(dashboard_path, intake.get("dashboard"))
-    except Exception as exc:
-        _append_bootstrap_note(store, status="FAILED", detail=f"Snapshot persistence failed: {exc}")
-        return {
-            "ok": False,
-            "stage": "SNAPSHOT_PERSISTENCE",
+            "stage": "WQ_LAB_ROOT_INTAKE",
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
@@ -113,9 +66,6 @@ def bootstrap_run(
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
-            "raw_intake_path": str(raw_path),
-            "baseline_path": str(baseline_path),
-            "dashboard_path": str(dashboard_path),
             "detail": initialized,
         }
 
@@ -128,37 +78,22 @@ def bootstrap_run(
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
-            "raw_intake_path": str(raw_path),
-            "baseline_path": str(baseline_path),
-            "dashboard_path": str(dashboard_path),
             "detail": dashboard,
         }
-
-    visualization = intake.get("visualization") if isinstance(intake.get("visualization"), dict) else {}
-    listing = visualization.get("recordset_listing") if isinstance(visualization.get("recordset_listing"), dict) else {}
-    recordsets = listing.get("results") if isinstance(listing.get("results"), list) else []
 
     _append_bootstrap_note(
         store,
         status="READY",
-        detail=(
-            f"Deterministic Root intake completed via local WQ Lab. "
-            f"Raw snapshot: {raw_path.name}; recordsets discovered: {len(recordsets)}."
-        ),
+        detail="Lean Root intake completed via local WQ Lab; continue directly into optimization.",
     )
 
     return {
         "ok": True,
-        "stage": "READY_FOR_DIAGNOSIS",
+        "stage": "READY_FOR_OPTIMIZATION",
         "root_alpha_id": alpha_id,
         "run_id": run_id,
         "state_path": str(state_path),
         "log_path": str(log_path),
-        "raw_intake_path": str(raw_path),
-        "baseline_path": str(baseline_path),
-        "dashboard_path": str(dashboard_path),
-        "diagnostic_alpha_id": visualization.get("diagnostic_alpha_id"),
-        "recordset_count": len(recordsets),
         "initialized": initialized,
         "dashboard_updated": True,
     }
@@ -166,18 +101,12 @@ def bootstrap_run(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Deterministic run bootstrap: WQ Lab intake -> Guard init -> Dashboard update."
+        description="Lean deterministic Root bootstrap: WQ Lab facts -> Guard init -> Dashboard."
     )
     parser.add_argument("--alpha-id", required=True)
-    parser.add_argument("--discovery-attempts", type=int, default=4)
-    parser.add_argument("--discovery-sleep-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
-    result = bootstrap_run(
-        args.alpha_id,
-        discovery_attempts=args.discovery_attempts,
-        discovery_sleep_seconds=args.discovery_sleep_seconds,
-    )
+    result = bootstrap_run(args.alpha_id)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
     return 0 if result.get("ok") else 2
 

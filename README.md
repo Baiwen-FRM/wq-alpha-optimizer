@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.5.1
+# wq-alpha-optimizer v3.5.2
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -62,21 +62,13 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - dashboard charts are generated with the Python standard library only and remain local under ignored run-log assets.
 
 
-## v3.5.0 local WQ Lab provider
+## v3.5 current architecture: local WQ Lab + lean execution
 
-- authenticated BRAIN I/O now uses the user's local WQ Lab/`wq_lib` as the normal provider instead of agent-selected CNHKMCP calls;
-- WQ Lab remains narrowly scoped to BRAIN communication; the optimizer does not vendor or restructure it;
-- the optimizer requires only three additive WQ Lab primitives: exact `get_datafield`, generic recordset discovery, and generic recordset retrieval;
-- `wq_lab_provider.py intake` fixes Root data acquisition order and emits separate raw-evidence, Guard-baseline, and Dashboard projections;
-- visualization control stays in the Skill: same expression/settings with only `visualization=true`, followed by bounded recordset discovery;
-- recordset-to-chart behavior is code-defined in `recordset_dashboard.py`; the model no longer chooses chart type or ordering;
-- normal execution has no silent CNHKMCP fallback, preventing backend choice from changing run behavior or UI.
+- authenticated BRAIN I/O uses the user's local WQ Lab/`wq_lib`; WQ Lab remains narrowly scoped to BRAIN communication and is not vendored into the Skill;
+- normal Root startup is one lean command, `scripts/bootstrap_run.py --alpha-id <ID>`, which obtains only current Alpha facts, submission checks and exact metadata for fields actually used by the expression, then initializes Guard/Dashboard;
+- visualization/recordsets are not a fixed startup tax: they are requested only when they can materially distinguish the active mechanism, and any acquired recordsets are rendered by fixed code in `recordset_dashboard.py` / `run_dashboard.py`;
+- Profile/Plan are internal control state, not a user-facing stopping point: an actionable active route continues in the same invocation to Focus → Hypothesis → Candidate → Simulation/Result;
+- live operator/schema validation happens only after a concrete candidate exists and only when that candidate changes signature-sensitive structure;
+- normal runtime artifacts stay under ignored `logs/`; do not create bundles of scratch evidence/projection files in `/private/tmp` or other project-external locations;
+- no silent CNHKMCP fallback is used, so transport choice cannot change optimizer behavior or Dashboard layout.
 
-
-## v3.5.1 deterministic bootstrap
-
-- normal Root intake is now one command: `scripts/bootstrap_run.py --alpha-id <ID>`;
-- the controller no longer manually chains run creation, WQ Lab intake, Guard initialization and Dashboard update;
-- every run persists raw intake, Guard baseline projection and Dashboard projection under `logs/.data/<run_id>/`;
-- WQ Lab capability mismatch fails before run creation; BRAIN/auth intake failure after run creation is written to the canonical audit log and stops the bootstrap;
-- low-level provider commands remain available only for debugging/recovery, preserving one stable normal execution order.

@@ -154,6 +154,15 @@ def _baseline_from_root(root: dict) -> dict:
     }
 
 
+def _dashboard_from_root(root: dict) -> dict:
+    fields = [
+        row["dashboard"]
+        for row in root.get("fields", [])
+        if isinstance(row, dict) and isinstance(row.get("dashboard"), dict)
+    ]
+    return {"fields": fields, "visualization": {}}
+
+
 def _dashboard_from_intake(root: dict, visualization: dict) -> dict:
     fields = [
         row["dashboard"]
@@ -302,6 +311,17 @@ def visualization_snapshot(
         "recordset_listing": listing,
         "recordsets": recordsets,
         "dashboard_visualization": dashboard_visualization,
+    }
+
+
+def root_intake_snapshot(alpha_id: str) -> dict:
+    wq = _load_wq_lib()
+    session = wq.login()
+    root = root_snapshot(session, wq, alpha_id)
+    return {
+        "root": root,
+        "baseline": _baseline_from_root(root),
+        "dashboard": _dashboard_from_root(root),
     }
 
 
