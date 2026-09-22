@@ -100,9 +100,11 @@ def _detail_checks(details: dict) -> list[dict]:
     return checks if isinstance(checks, list) else []
 
 
-def _guard_checks(details: dict) -> list[dict]:
+def _guard_checks(payload: dict) -> list[dict]:
+    values = payload.get("is") if isinstance(payload, dict) and isinstance(payload.get("is"), dict) else payload
+    checks = values.get("checks") if isinstance(values, dict) else None
     rows = []
-    for item in _detail_checks(details):
+    for item in (checks if isinstance(checks, list) else []):
         if not isinstance(item, dict) or not item.get("name"):
             continue
         status = item.get("status") or item.get("result")
@@ -125,6 +127,16 @@ def _baseline_from_root(root: dict) -> dict:
     for key in list(settings):
         if str(key).lower() == "testperiod":
             settings.pop(key)
+    dedicated_check_payload = root.get("submission_check_raw") if isinstance(root.get("submission_check_raw"), dict) else {}
+    dedicated_checks = _guard_checks(dedicated_check_payload)
+    fallback_checks = _guard_checks(details)
+    checks = dedicated_checks or fallback_checks
+    dedicated_complete = bool(dedicated_checks)
+    source = (
+        "BRAIN:wq_lib.get_result+get_submission_check"
+        if dedicated_complete
+        else "BRAIN:wq_lib.get_result(checks_fallback)"
+    )
     return {
         "alpha_id": root["alpha_id"],
         "expression": expressions[0],
@@ -133,10 +145,10 @@ def _baseline_from_root(root: dict) -> dict:
         "language": str(settings.get("language") or "FASTEXPR"),
         "result_evidence": {
             "metrics": root.get("metrics") or {},
-            "checks": _guard_checks(details),
+            "checks": checks,
             "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "source": "BRAIN:wq_lib.get_result",
-            "response_complete": True,
+            "source": source,
+            "response_complete": dedicated_complete,
             "authenticated": True,
         },
     }
