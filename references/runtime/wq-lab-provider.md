@@ -48,17 +48,15 @@ These three functions must return BRAIN facts without dashboard-specific transfo
 
 ## Deterministic intake
 
-After `start-run`, the normal Root intake is one fixed command:
+The normal optimizer entrypoint is:
 
 ```text
-python3 scripts/wq_lab_provider.py intake \
-  --alpha-id <ID> \
-  --output <raw-intake.json> \
-  --baseline-output <baseline.json> \
-  --dashboard-output <dashboard.json>
+python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-The command uses one authenticated WQ Lab session and always performs the same order:
+`bootstrap_run.py` owns run creation, persistence, Guard initialization and Dashboard update. It calls the lower-level `wq_lab_provider.py` code rather than asking the controller to chain commands manually.
+
+The provider layer uses one authenticated WQ Lab session and always performs the same BRAIN order:
 
 1. Alpha details;
 2. submission check;
@@ -70,7 +68,7 @@ The command uses one authenticated WQ Lab session and always performs the same o
 8. fetch each discovered recordset as raw schema/records;
 9. build deterministic dashboard field rows and chart specs.
 
-The raw intake is evidence. `baseline.json` is only the Guard initialization projection. `dashboard.json` is only the deterministic presentation projection.
+The bootstrap stores all three under `logs/.data/<run_id>/`: `intake.json` is raw evidence, `baseline.json` is only the Guard initialization projection, and `dashboard.json` is only the deterministic presentation projection. The lower-level provider CLI remains available for debugging/recovery but is not the normal controller path.
 
 ## Visualization normalization
 

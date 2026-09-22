@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.5.0
+# wq-alpha-optimizer v3.5.1
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -71,3 +71,12 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - visualization control stays in the Skill: same expression/settings with only `visualization=true`, followed by bounded recordset discovery;
 - recordset-to-chart behavior is code-defined in `recordset_dashboard.py`; the model no longer chooses chart type or ordering;
 - normal execution has no silent CNHKMCP fallback, preventing backend choice from changing run behavior or UI.
+
+
+## v3.5.1 deterministic bootstrap
+
+- normal Root intake is now one command: `scripts/bootstrap_run.py --alpha-id <ID>`;
+- the controller no longer manually chains run creation, WQ Lab intake, Guard initialization and Dashboard update;
+- every run persists raw intake, Guard baseline projection and Dashboard projection under `logs/.data/<run_id>/`;
+- WQ Lab capability mismatch fails before run creation; BRAIN/auth intake failure after run creation is written to the canonical audit log and stops the bootstrap;
+- low-level provider commands remain available only for debugging/recovery, preserving one stable normal execution order.

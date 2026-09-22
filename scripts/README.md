@@ -31,20 +31,20 @@ Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经
 State mutation is single-writer. Concurrent/stale state snapshots are rejected with `STATE_WRITE_CONFLICT`; re-read the state and retry serially. This prevents evidence loss from overlapping Guard commands.
 
 
-## WQ Lab provider
+## Deterministic bootstrap
 
-`wq_lab_provider.py` is a thin Skill-side bridge to the user's local `wq_lib`. It does not contain BRAIN HTTP implementations and does not vendor WQ Lab.
-
-Normal Root intake:
+Normal Root intake is a single command:
 
 ```text
-python3 scripts/wq_lab_provider.py intake \
-  --alpha-id <ID> \
-  --output <raw-intake.json> \
-  --baseline-output <baseline.json> \
-  --dashboard-output <dashboard.json>
+python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-Then initialize/update the Guard using the emitted projections. `recordset_dashboard.py` deterministically maps raw BRAIN recordsets to chart specs; `run_dashboard.py` renders those specs. Rendering/MD code remains in this Skill, never in WQ Lab.
+It performs local WQ Lab capability preflight, creates the canonical run, executes WQ Lab intake, persists `logs/.data/<run_id>/{intake,baseline,dashboard}.json`, initializes the Guard, and updates the live Dashboard. The controller should not manually reorder these steps.
+
+## WQ Lab provider
+
+`wq_lab_provider.py` is the lower-level Skill-side bridge to the user's local `wq_lib`. It does not contain BRAIN HTTP implementations and does not vendor WQ Lab. Its CLI remains available for debugging/recovery; normal execution goes through `bootstrap_run.py`.
+
+`recordset_dashboard.py` deterministically maps raw BRAIN recordsets to chart specs; `run_dashboard.py` renders those specs. Rendering/MD code remains in this Skill, never in WQ Lab.
 
 The local WQ Lab must expose the three additive generic reads listed in `../references/runtime/wq-lab-provider.md`. No silent CNHKMCP fallback is used.
