@@ -518,6 +518,15 @@ def _catalog_entry_for_blocker(blocker: str) -> Dict[str, Any]:
     entry = blockers.get(key)
     if isinstance(entry, dict):
         return entry
+
+    # BRAIN may return a known check family with a policy/detail suffix
+    # (for example LOW_ROBUST_UNIVERSE_SHARPE.WITH_RATIO). Resolve the
+    # canonical family before treating it as an unknown project check.
+    base_name = name.split(".", 1)[0]
+    base_key = aliases.get(base_name, base_name)
+    entry = blockers.get(base_key)
+    if isinstance(entry, dict):
+        return entry
     if name.startswith("LOW_GLB_") or name.startswith("LOW_ASI_"):
         return {
             "target": "REGIONAL_SHARPE",
@@ -644,11 +653,16 @@ def _normalize_synthesis(
                         "CURRENT_DIAGNOSTIC/CURRENT_CANDIDATE_RESULT/SCOPE_BOUNDARY"
                     )
                 evidence_rows = [state["evidence"][ref] for ref in refs]
+                mechanism_subjects = {
+                    mechanism,
+                    f"MECHANISM:{mechanism}",
+                }
+                family_subjects = {
+                    method_family,
+                    f"METHOD_FAMILY:{method_family}",
+                }
+                expected_subjects = mechanism_subjects | family_subjects
                 if basis == "CURRENT_DIAGNOSTIC":
-                    expected_subjects = {
-                        mechanism,
-                        f"MECHANISM:{mechanism}",
-                    }
                     if not any(
                         str(row.get("kind", "")).upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
                         and str(row.get("source", "")).startswith("BRAIN:")
@@ -656,17 +670,30 @@ def _normalize_synthesis(
                         for row in evidence_rows
                     ):
                         raise ValueError(
-                            "CURRENT_DIAGNOSTIC exclusion requires mechanism-specific "
+                            "CURRENT_DIAGNOSTIC exclusion requires mechanism/method-family-specific "
                             "BRAIN diagnostic-exclusion evidence"
                         )
                 elif basis == "CURRENT_CANDIDATE_RESULT":
-                    if not any(str(row.get("kind", "")).upper() == "CANDIDATE_RESULT" for row in evidence_rows):
+                    if not any(
+                        str(row.get("kind", "")).upper() == "CANDIDATE_RESULT"
+                        and str(row.get("source", "")).startswith("BRAIN:")
+                        and str(row.get("subject", "")) in expected_subjects
+                        for row in evidence_rows
+                    ):
                         raise ValueError(
-                            "CURRENT_CANDIDATE_RESULT exclusion requires CANDIDATE_RESULT evidence"
+                            "CURRENT_CANDIDATE_RESULT exclusion requires mechanism/method-family-specific "
+                            "BRAIN CANDIDATE_RESULT evidence"
                         )
                 elif basis == "SCOPE_BOUNDARY":
-                    if not any(str(row.get("kind", "")).upper() == "SCOPE_BOUNDARY" for row in evidence_rows):
-                        raise ValueError("SCOPE_BOUNDARY exclusion requires SCOPE_BOUNDARY evidence")
+                    if not any(
+                        str(row.get("kind", "")).upper() == "SCOPE_BOUNDARY"
+                        and str(row.get("subject", "")) in expected_subjects
+                        for row in evidence_rows
+                    ):
+                        raise ValueError(
+                            "SCOPE_BOUNDARY exclusion requires mechanism/method-family-specific "
+                            "SCOPE_BOUNDARY evidence"
+                        )
                 normalized_item["exclusion_basis"] = basis
             assessments.append(normalized_item)
 
