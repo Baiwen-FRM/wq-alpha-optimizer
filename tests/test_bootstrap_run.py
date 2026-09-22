@@ -80,7 +80,7 @@ class BootstrapRunTests(TestCase):
         state = store.read()
         self.assertEqual(state["root_baseline"]["alpha_id"], "ROOT")
         self.assertEqual(state["dashboard_context"]["fields"][0]["description"], "Closing price")
-        self.assertEqual(state["dashboard_context"]["visualization"], {})
+        self.assertEqual(state["dashboard_context"]["visualization"], {"charts": []})
 
         self.assertFalse((self.logs / ".data").exists())
 
