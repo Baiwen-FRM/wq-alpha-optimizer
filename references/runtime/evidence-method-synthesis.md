@@ -14,6 +14,10 @@ It does **not** claim that the current evidence reveals the true cause. Its job 
 
 The output is a small set of falsifiable mechanism assessments that can drive diagnostics or experiments.
 
+## Ownership
+
+`mechanism-catalog.json` is only the machine-readable mirror of the method families already owned by `references/index.md` and the corresponding Primary optimization references. It may constrain planning/exhaustion bookkeeping, but it must not invent operator semantics, numeric parameters, thresholds or new repair recipes. When catalog wording and an owner reference disagree, fix the catalog to match the owner reference rather than treating the catalog as a second rulebook.
+
 ## Scaffold
 
 After mandatory intake evidence has been registered, create the deterministic scaffold:
