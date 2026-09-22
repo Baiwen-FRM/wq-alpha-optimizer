@@ -117,7 +117,7 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(scaffold["context"]["expression"], "ts_mean(close, 10)")
         self.assertEqual(scaffold["context"]["settings"]["region"], "GBR")
         self.assertEqual(scaffold["context"]["result_evidence"]["checks"][0]["name"], "LOW_SHARPE")
-        self.assertEqual(scaffold["context"]["fields"], [])
+        self.assertEqual(scaffold["context"]["fields"], [{"name": "close"}])
         self.assertEqual(scaffold["context"]["visualization"], {})
         self.assertEqual([row["name"] for row in scaffold["blockers"]], ["LOW_SHARPE"])
         methods = {row["method_family"] for row in scaffold["blockers"][0]["mechanisms"]}
