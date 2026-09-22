@@ -147,6 +147,9 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(result["ok"], result)
         routes = result["plan"]["routes"]
         self.assertEqual([route["status"] for route in routes], ["ACTIVE", "PENDING"])
+        self.assertTrue(result["must_continue"])
+        self.assertEqual(result["next_required_action"], "SET_FOCUS")
+        self.assertEqual(result["active_route_id"], "R1")
 
     def test_exhausting_focus_activates_pending_route_without_finishing_run(self):
         self.store.set_plan(

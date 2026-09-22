@@ -2,25 +2,26 @@
 
 目标是取得**足以定位当前 mechanism 的证据**，不是机械跑满所有诊断。用户可读证据只追加到本次 run 的 canonical log；machine state 由 guard 独立维护。
 
-## Stage 0 — LEAN ROOT BOOTSTRAP
+## Stage 0 — RUN START / DETERMINISTIC BOOTSTRAP
 
-收到并接受一个现有 Alpha ID 后，正常路径只运行：
+收到并接受一个现有 Alpha ID 后，正常路径只运行一个入口：
 
 ```text
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-Bootstrap 只做优化真正开始前不可缺少的 Root intake：
+**任何分析/评判开始前，四类信息都必须取得：**
 
-1. 本地 WQ Lab capability preflight；
-2. 创建 canonical run MD/state；
-3. 取得当前 Alpha expression/settings/Result/submission checks；
-4. 对 expression 实际使用的 fields 做 exact metadata lookup；
-5. 初始化 Guard 并更新固定 Dashboard。
+1. **Expression + Settings**：当前 Alpha expression、instrument/region/universe/delay/decay/neutralization/truncation 等 locked settings；
+2. **Result + Checks**：current Sharpe/Fitness/Returns/Margin/Turnover 等 Result，以及专用 submission-check endpoint 的 current checks；
+3. **Data Field / Dataset**：从 expression 解析实际使用 fields，并对这些 fields 做 exact detail lookup，记录 description/type/dataset/coverage/dateCoverage；
+4. **Visualization**：先检查现有 rich recordsets；若不足，创建一个 same-expression / same-settings、仅 `visualization=true` 的 diagnostic simulation。对 diagnostic Alpha 的 recordset listing 做有界稳定性确认，然后读取**平台当前列出的全部 available recordsets**。不要把“19”硬编码成协议；某次平台列出 19 个，就必须尝试读取这 19 个，未来列出 17/21 个也按实际列表全取。
 
-**这里不做** visualization POST、recordset sweep、correlation、历史大范围检索、operator 全表核对或 candidate simulation。Bootstrap 返回 `READY_FOR_OPTIMIZATION` 后立即进入 ROOT/DIAGNOSE/PLAN，并在存在 actionable route 时继续到 candidate；不得把 bootstrap/Profile/Plan 当成用户请求的完成点。
+Bootstrap 固定完成 run MD/state 创建、上述四类事实取得、raw intake 持久化、Guard baseline 初始化与 Dashboard 更新。Controller 不得把这些步骤拆开自由重排。
 
-正常运行产生的 runtime artifact 必须留在本 Skill 的 `logs/` 下。不要为了串 CLI 在 `/private/tmp` 或项目外生成一组 evidence/baseline/dashboard 临时文件。
+若单个 recordset 在有界 retry 后仍不可读，保留其 listing 与 incomplete/unavailable 状态并继续使用其余事实；不要误判为“没有 visualization”。只有 WQ Lab capability/auth/BRAIN 整体不可继续时 bootstrap 才失败。
+
+**Bootstrap 不是用户请求的完成点。** 返回 `READY_FOR_DIAGNOSIS` 后，必须在同一次 optimize 执行继续 Stage A → B → C；若 plan 有 ACTIVE route，再立即继续 Stage D → E → F。不得以“已完成 intake/Profile/Plan，下一步将继续”为最终答复。
 
 ## Stage A — ROOT
 
@@ -35,7 +36,7 @@ Root Baseline immutable；Incumbent 初始等于 Root。`PENDING` 是未知，�
 
 初始化 guard 时尽量把 Root 的 current Result/check snapshot 一并写入 `result_evidence`，这样后续 protected metric / new blocker 比较可以 machine-check。
 
-Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的可读投影，固定包含：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。字段 description/type/dataset/coverage/dateCoverage 可取得时补齐；没有 visualization 时明确写 unavailable/pending，不猜。
+四类 Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的固定可读投影：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。如果 visualization 或某个 recordset 经有界恢复仍不可得，明确写 incomplete/unavailable，不猜，也不因此跳过后续分析。
 
 ## Stage B — DIAGNOSE
 
@@ -47,7 +48,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 区分平台事实、结构推断、未证实假设。字段名不能代替字段语义；field description 应参与 expression node → idea role 的解释，但 description 本身不证明 PIT、lag、update cadence、unit 或 missing semantics。
 
-只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Visualization/recordsets 是**按需诊断**，不是每次 Root intake 的固定成本；只有当当前 blocker/mechanism 需要这些信息才能区分下一步时才调用 `visualization-snapshot`。取得后也只有能区分机制的部分才注册为 routing evidence。
+先基于 mandatory intake 的四类信息进行完整判断：expression/settings 给结构与约束，Result/checks 给目标，field metadata 给数据语义，visualization/recordsets 给时间稳定性、coverage、size/sector/industry exposure 等横截面信息。recordsets 是基础信息面；只有其中能实际支持某个机制判断的内容才注册为 routing evidence。若这四类信息之外仍存在一个能实质区分机制的 in-scope diagnostic，再增加 targeted deep diagnostic，而不是重新做一遍普遍 intake。
 
 **Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
 
@@ -71,7 +72,7 @@ expression node → operator/transformation → field → dataset → idea role
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
 - Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
 - 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 仍为空才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
-- **建立 plan 后不得停。** 如果 plan 中存在 `ACTIVE` route，则立即进入 FOCUS/HYPOTHESIS/CANDIDATE。除非用户明确只要求审计/诊断，或平台不可继续，否则“计划已固化，下一步将继续”不是合法 closeout。
+- **Plan 写入后立即执行。** `set-plan` 若返回 `must_continue=true` / `next_required_action=SET_FOCUS`，controller 必须立即进入 Stage D；正常 optimize 请求不得在这里结束或向用户报告“下一步再继续”。
 
 ## Stage D — FOCUS
 
@@ -98,7 +99,7 @@ ENHANCEMENT 不是无限优化许可，也不能用来绕过已有 FAIL blocker�
 
 本阶段只负责顺序：**先冻结 hypothesis，再生成 candidate，再做 live operator/schema 检查，再 preflight/reserve**。所有字段、允许的 mutation、field/complexity 约束、payload binding 与 transport 行为只以 `candidate-contract.md` 为准；本文件不重复定义。
 
-先生成明确的 candidate 结构，再判断是否需要 live operator/schema 核对。只有 candidate **引入或改变** operator family、GROUP/VECTOR 参数角色、named argument 或其它 signature-sensitive 结构时，才在 reserve/POST 前用当前 `get_operators()` 核对名称、arity/type/NaN 语义。仅仅“存在 active route”不是做 operator 全表核对的理由。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
+若 candidate 引入或改变 operator family、GROUP/VECTOR 参数角色、named argument 或其它可能受 live signature 影响的结构，在 reserve/POST 前用当前 `get_operators()` 定义核对名称、arity/type/NaN 语义，并把能驱动决定的结论注册为 evidence。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
 
 Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。
 
