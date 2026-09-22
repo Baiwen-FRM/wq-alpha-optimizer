@@ -39,6 +39,15 @@ expression node → operator/transformation → field → dataset → idea role
 
 只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Visualization 同样按证据触发，不是固定 gate。
 
+**Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
+
+只有以下任一成立时才可以跳过该 escalation：
+- 当前 run 已经取得等价、可审计的 diagnostic；
+- 有一个历史 run 的同一 Root identity 已经取得该 diagnostic，且当前 expression/settings/scope 与关键 Result/check facts 没有 material drift；
+- 平台经过有界恢复后仍无法提供该 diagnostic，此时记录 unavailable/unknown，而不是猜。
+
+如果日志在 closeout 中写“继续需要某个当前 scope 内可取得的 diagnostic”，但本 run 并未尝试它，则不能把当前 run 归因于 `COMPLETED_WITH_EXHAUSTION`；先完成 diagnostic escalation。
+
 所有要驱动 machine decision 的诊断，先作为 evidence record 注册到 guard。
 
 ## Stage C — PROFILE / OPTIMIZATION PLAN
@@ -46,6 +55,7 @@ expression node → operator/transformation → field → dataset → idea role
 第一次正式 candidate 前，基于当前 Root/Incumbent 和本 run 已注册 evidence 建立一个可审计的 Alpha Profile，并生成持久的 mechanism-level plan：
 
 - 聚合 expression/settings、Result/checks、fields/dataset/type/coverage、PnL/时间稳定性、可用 exposure/concentration、expression structure 与历史实验；拿不到的内容写 unknown，不猜；
+- 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能审计到 candidate expression/settings/result/disposition；只有“以前试过”这种摘要不能自动继承 exhaustion。身份不匹配或事实漂移时，历史 run 只作背景，不阻止当前 run 重新诊断；
 - 每条 route 必须有 target、Primary owner、mechanism、evidence refs 和 rationale；operator 存在性不是 route evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“可能需要更多诊断”，先留在 DIAGNOSE，不要先建 route 再立刻 evidence-exhaust；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
@@ -89,7 +99,7 @@ Simulation 后先登记 raw Result/check evidence，再由 guard 按 `candidate-
 - `REFUTED`：淘汰该 hypothesis；只有仍存在不同、未解决且 evidence-supported 的问题时才开下一 hypothesis。
 - `INCONCLUSIVE`：只有缺失信息能够被明确补齐时才 retest；否则停止该问题。
 - 当前 focus 已没有新的合理 question：`exhaust-focus`；guard 关闭当前 route，并自动激活下一个 pending route（如有）。
-- 没有 pending route 时，controller 先执行一次 final re-plan；只有 final re-plan 仍为空且没有 OPEN hypothesis/focus/ACTIVE route，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。若一个 route 从激活到 exhaustion **没有产生任何 hypothesis/candidate**，日志必须说明是哪个新诊断事实让它失去 actionability；不能只复述进入 route 前就已知的 blocker。
+- 没有 pending route 时，controller 先执行一次 final re-plan；只有 final re-plan 仍为空且没有 OPEN hypothesis/focus/ACTIVE route，且所有会 materially change routing 的可取得 in-scope diagnostics 已完成或明确 unavailable，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。若一个 route 从激活到 exhaustion **没有产生任何 hypothesis/candidate**，日志必须说明是哪个新诊断事实让它失去 actionability，或列出已复用且身份匹配的历史 negative evidence；不能只复述进入 route 前就已知的 blocker。
 - 若 submission check 的 `PENDING/UNKNOWN` 与专用 endpoint 的 `passes_check/value/limit` 冲突，做一次有界 fresh reconciliation；仍冲突则保留 unresolved/unknown，不据此 promotion、也不为通过 check 制造 candidate。
 - `SUBMISSION_READY` 只能在当前 Incumbent 的 fresh、完整、authenticated、auditable checks 没有 blocking/unresolved 项时由 guard 接受；普通 `SUCCESS` 不等价于 submission-ready。
 - 用户明确停止、下一步必须跨 locked scope、或认证平台在恢复纪律后仍不可继续时，分别使用 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE`。这些 terminal 会冻结当时 machine state，不要求为了“收尾好看”伪造关闭动作。

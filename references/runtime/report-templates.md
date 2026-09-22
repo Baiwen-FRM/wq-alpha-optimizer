@@ -21,6 +21,8 @@ Idea / expression map: {...}
 Fields actually used: {...}
 Evidence registered: {E1, E2, ...; source / observed_at / claim}
 Deep diagnostics / visualization used: {why / none}
+Diagnostic escalation considered: {needed / reused historical evidence / attempted and unavailable / not needed}
+Historical evidence reused: {run id / Root identity match / candidate families / why still applicable}
 Unknowns: {...}
 ```
 
@@ -56,6 +58,7 @@ Mutation: {expression OR one setting key}
 Success criteria: {machine-readable criteria}
 Protected metrics: {rule / tolerance}
 Failure meaning: {...}
+Why this candidate is preferred over diagnostic escalation or other mechanism families: {...}
 Evidence refs: {...}
 Payload fingerprint: {...}
 vs Root drift note: {...}
@@ -79,6 +82,8 @@ Submission Ready: {YES / NO / unknown}
 Remaining blockers: {...}
 Remaining unknowns: {...}
 Exhausted focus/families: {...}
+Diagnostics completed before exhaustion: {...}
+Diagnostics still unavailable: {...}
 Current-result refreshes: {source / observed_at / readiness effect}
 Plan revisions / final re-plan: {...}
 ```
