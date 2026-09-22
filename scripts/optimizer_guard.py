@@ -1402,7 +1402,7 @@ class StateStore:
             return {"initialized": False, "reason": "ROOT_BASELINE_IMMUTABLE", "log_path": state["run"]["log_path"]}
         state["root_baseline"] = snapshot
         state["incumbent"] = dict(snapshot)
-        state["planning_contract"] = "v1"
+        state["planning_contract"] = "v2"
         state["optimization_plan"] = None
         state["optimization_plan_history"] = []
         state["allowed_fields"] = list(snapshot["fields"])
