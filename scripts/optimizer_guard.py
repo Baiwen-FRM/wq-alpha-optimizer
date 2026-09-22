@@ -1511,12 +1511,11 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_ROUTE", "route_id": route_id}
         if route.get("status") not in {"ACTIVE", "PENDING"}:
             return {"ok": False, "reason": "ROUTE_NOT_OPEN", "status": route.get("status")}
-        if route.get("status") == "ACTIVE":
-            closure_rejection = _route_closure_rejection(
-                state, route, evidence_ref=evidence_ref, plan=plan
-            )
-            if closure_rejection:
-                return closure_rejection
+        closure_rejection = _route_closure_rejection(
+            state, route, evidence_ref=evidence_ref, plan=plan
+        )
+        if closure_rejection:
+            return closure_rejection
         was_active = route.get("status") == "ACTIVE"
         route["status"] = status
         route["close_reason"] = reason.strip()
