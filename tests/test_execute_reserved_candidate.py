@@ -358,5 +358,102 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertEqual(state["simulations"][self.fingerprint]["simulation_id"], "/simulations/S5")
 
 
+    def test_201_without_location_is_ambiguous_and_never_reposted(self):
+        wq = SequenceWQ([FakeResponse(201, text="created without Location")], [])
+        first = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(first["ok"])
+        self.assertEqual(first["stage"], "AMBIGUOUS_POST")
+        self.assertEqual(self.store.read()["simulations"][self.fingerprint]["status"], "AMBIGUOUS_POST")
+        self.assertEqual(wq.start_calls, 1)
+
+        second = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["stage"], "POST_RECONCILIATION_REQUIRED")
+        self.assertEqual(wq.start_calls, 1)
+
+    def test_server_5xx_is_ambiguous_not_release_and_retry(self):
+        wq = SequenceWQ([FakeResponse(503, text="service unavailable")], [])
+        result = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "AMBIGUOUS_POST")
+        self.assertTrue(result["recovery_required"])
+        self.assertEqual(self.store.read()["simulations"][self.fingerprint]["status"], "AMBIGUOUS_POST")
+        self.assertNotEqual(self.store.read()["simulations"][self.fingerprint]["status"], "RELEASED")
+
+    def test_http_429_retry_budget_is_machine_bounded(self):
+        wq = SequenceWQ(
+            [
+                FakeResponse(429, text="rate limited 1"),
+                FakeResponse(429, text="rate limited 2"),
+                FakeResponse(429, text="rate limited 3"),
+            ],
+            [],
+        )
+        for expected_retry in (1, 2, 3):
+            result = executor.execute_reserved_candidate(self.store, wq, object())
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["stage"], "HTTP_429")
+            self.assertEqual(
+                self.store.read()["simulations"][self.fingerprint]["retry_count"],
+                expected_retry,
+            )
+
+        exhausted = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(exhausted["ok"])
+        self.assertEqual(exhausted["stage"], "HTTP_429_RETRY_REJECTED")
+        self.assertEqual(exhausted["guard"]["reason"], "HTTP_429_RETRY_EXHAUSTED")
+        self.assertEqual(wq.start_calls, 3)
+
+    def test_missing_required_metric_keeps_result_pending_instead_of_false_inconclusive(self):
+        class MissingFitnessWQ(SequenceWQ):
+            def get_result(self, session, alpha_id):
+                return {
+                    "id": alpha_id,
+                    "type": "REGULAR",
+                    "regular": {"code": "rank(-close)"},
+                    "settings": {
+                        "language": "FASTEXPR",
+                        "region": "GBR",
+                        "delay": 0,
+                        "universe": "TOP700",
+                        "instrumentType": "EQUITY",
+                        "decay": 5,
+                        "truncation": 0.08,
+                    },
+                    "is": {
+                        "sharpe": 2.2,
+                        "turnover": 0.2,
+                    },
+                }
+
+        wq = MissingFitnessWQ(
+            [FakeResponse(201, location="/simulations/S6")],
+            [{"status": "done", "alpha_id": "CHILD"}],
+        )
+        result = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "RESULT_EVIDENCE_PENDING")
+        self.assertIn("protected_metric:FITNESS", result["missing_contract_observations"])
+        self.assertEqual(self.store.read()["hypotheses"]["H1"]["status"], "OPEN")
+        self.assertNotIn("result_evaluation", self.store.read()["candidates"][self.fingerprint])
+
+    def test_terminal_transport_failure_is_idempotent_when_fingerprint_is_explicit(self):
+        wq = SequenceWQ([FakeResponse(400, text="invalid simulation payload")], [])
+        first = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(first["stage"], "NO_POST_INCONCLUSIVE")
+
+        second = executor.execute_reserved_candidate(
+            self.store,
+            wq,
+            object(),
+            fingerprint=self.fingerprint,
+        )
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(second["stage"], "HYPOTHESIS_ALREADY_TERMINAL")
+        self.assertTrue(second["idempotent"])
+        self.assertEqual(wq.start_calls, 1)
+
+
 if __name__ == "__main__":
     main()
