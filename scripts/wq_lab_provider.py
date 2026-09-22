@@ -29,7 +29,7 @@ def _load_wq_lib():
     required = (
         "login", "get_result", "get_submission_check", "get_datafield",
         "get_alpha_recordsets", "get_alpha_recordset", "get_prod_corr",
-        "get_self_corr", "get_operators", "simulate_single",
+        "get_self_corr", "get_operators", "simulate_single", "_start_simulation",
     )
     missing = [name for name in required if not callable(getattr(module, name, None))]
     if missing:
@@ -116,6 +116,34 @@ def _guard_checks(payload: dict) -> list[dict]:
         row.pop("result", None)
         rows.append(row)
     return rows
+
+
+def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> dict:
+    details = wq.get_result(session, alpha_id)
+    if not isinstance(details, dict) or not details:
+        return {
+            "alpha_id": alpha_id,
+            "simulation_id": simulation_id,
+            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "source": "BRAIN:wq_lib.get_result+get_submission_check",
+            "response_complete": False,
+            "authenticated": True,
+            "metrics": {},
+            "checks": [],
+        }
+
+    dedicated_payload = wq.get_submission_check(session, alpha_id)
+    dedicated_checks = _guard_checks(dedicated_payload if isinstance(dedicated_payload, dict) else {})
+    return {
+        "alpha_id": alpha_id,
+        "simulation_id": simulation_id,
+        "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source": "BRAIN:wq_lib.get_result+get_submission_check",
+        "response_complete": bool(dedicated_checks),
+        "authenticated": True,
+        "metrics": _metrics(details),
+        "checks": dedicated_checks,
+    }
 
 
 def _baseline_from_root(root: dict) -> dict:
@@ -390,6 +418,11 @@ def main() -> None:
     p.add_argument("--alpha-id", required=True)
     p.add_argument("--output")
 
+    p = sub.add_parser("result-evidence")
+    p.add_argument("--alpha-id", required=True)
+    p.add_argument("--simulation-id", required=True)
+    p.add_argument("--output")
+
     p = sub.add_parser("visualization-snapshot")
     p.add_argument("--alpha-id", required=True)
     p.add_argument("--output")
@@ -445,6 +478,8 @@ def main() -> None:
         _emit(data, args.output)
     elif args.cmd == "root-snapshot":
         _emit(root_snapshot(session, wq, args.alpha_id), args.output)
+    elif args.cmd == "result-evidence":
+        _emit(result_evidence_snapshot(session, wq, args.alpha_id, args.simulation_id), args.output)
     elif args.cmd == "visualization-snapshot":
         _emit(
             visualization_snapshot(
