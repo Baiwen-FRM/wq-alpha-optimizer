@@ -71,6 +71,12 @@ class WQLabProviderTests(TestCase):
         self.assertEqual(row["coverage"], 1.0)
         self.assertEqual(row["dateCoverage"], 0.99)
 
+        baseline = provider._baseline_from_root(snapshot)
+        self.assertEqual(baseline["alpha_id"], "A1")
+        self.assertEqual(baseline["expression"], "rank(close)")
+        self.assertEqual(baseline["fields"], ["close"])
+        self.assertEqual(baseline["result_evidence"]["checks"][0]["status"], "FAIL")
+
     def test_recordset_adapters_are_deterministic(self):
         recordsets = {
             "sharpe-by-cap": {
