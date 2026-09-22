@@ -567,7 +567,10 @@ def main() -> int:
         recover_location=args.recover_location,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    return 0 if result.get("ok") else 2
+    # A resumable state is a successful, side-effect-safe executor outcome, not
+    # a shell failure. The controller may invoke the executor again in the same
+    # optimize run without reposting.
+    return 0 if result.get("ok") or result.get("resumable") else 2
 
 
 if __name__ == "__main__":
