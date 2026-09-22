@@ -34,7 +34,7 @@ Run start → Root snapshot → Diagnose/Profile → Ordered Plan
    / USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE
 ```
 
-An empty Profile/Plan is valid only after the evidence+method synthesis gate proves that every current blocker method family is either audibly excluded or has no unresolved discriminator; the controller must not invent a route merely to keep searching, but it also cannot use history summaries to skip unassessed method space. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
+An empty Profile/Plan is valid only after the evidence+method synthesis gate proves that every current blocker method family is either auditably excluded or has no unresolved discriminator; the controller must not invent a route merely to keep searching, but it also cannot use history summaries to skip unassessed method space. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
 
 
 ## v3.3.1 real-run hardening
