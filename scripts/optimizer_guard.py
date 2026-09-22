@@ -92,7 +92,7 @@ def _render_run_log(state: Dict[str, Any]) -> str:
         text += body + "\n"
     return text
 
-HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE"}
+HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE", "WITHDRAWN"}
 FOCUS_TYPES = {"DEFECT", "ENHANCEMENT"}
 TRANSPORT_TRANSITIONS = {
     "RESERVED": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
@@ -2191,6 +2191,76 @@ class StateStore:
         self._write(state)
         return {"ok": True, "already_open": False, "hypothesis_id": hypothesis_id}
 
+    def withdraw_hypothesis(self, hypothesis_id: str, reason: str) -> Dict[str, Any]:
+        """Withdraw an OPEN hypothesis only before any candidate reservation exists."""
+        if not hypothesis_id.strip() or not reason.strip():
+            return {"ok": False, "reason": "WITHDRAW_HYPOTHESIS_CONTRACT_REQUIRED"}
+
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+
+        focus = state.get("focus")
+        if not focus or focus.get("status") != "OPEN":
+            return {"ok": False, "reason": "NO_OPEN_FOCUS"}
+
+        hypothesis = state.get("hypotheses", {}).get(hypothesis_id)
+        if not hypothesis:
+            return {"ok": False, "reason": "UNKNOWN_HYPOTHESIS"}
+        if hypothesis.get("status") != "OPEN":
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_NOT_OPEN",
+                "status": hypothesis.get("status"),
+            }
+        if hypothesis.get("focus_revision") != focus.get("revision"):
+            return {"ok": False, "reason": "HYPOTHESIS_NOT_IN_CURRENT_FOCUS"}
+
+        fingerprint = hypothesis.get("candidate_fingerprint")
+        if fingerprint:
+            simulation = state.get("simulations", {}).get(fingerprint)
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_ALREADY_BOUND_TO_CANDIDATE",
+                "fingerprint": fingerprint,
+                "transport_status": None if not simulation else simulation.get("status"),
+            }
+
+        transport_refs = sorted(
+            fp
+            for fp, row in state.get("simulations", {}).items()
+            if isinstance(row, dict) and str(row.get("hypothesis_id") or "") == hypothesis_id
+        )
+        candidate_refs = sorted(
+            fp
+            for fp, row in state.get("candidates", {}).items()
+            if isinstance(row, dict)
+            and str((row.get("spec") or {}).get("hypothesis_id") or "") == hypothesis_id
+        )
+        if transport_refs or candidate_refs:
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_TRANSPORT_ALREADY_STARTED",
+                "simulation_fingerprints": transport_refs,
+                "candidate_fingerprints": candidate_refs,
+            }
+
+        hypothesis["status"] = "WITHDRAWN"
+        hypothesis["result"] = {
+            "disposition": "WITHDRAWN_BEFORE_RESERVATION",
+            "reason": reason.strip(),
+            "at": _now_iso(),
+        }
+        state["hypotheses"][hypothesis_id] = hypothesis
+        self._write(state)
+        return {
+            "ok": True,
+            "hypothesis_id": hypothesis_id,
+            "status": "WITHDRAWN",
+            "reason": reason.strip(),
+        }
+
     def allow_field(self, field: str, evidence_ref: str) -> Dict[str, Any]:
         field = field.strip()
         state = self.read()
@@ -2611,6 +2681,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("exhaust-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--evidence-ref")
     p = sub.add_parser("finish-run"); p.add_argument("--status", required=True, choices=sorted(RUN_TERMINAL_STATUSES)); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("open-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--id", required=True); p.add_argument("--contract", required=True)
+    p = sub.add_parser("withdraw-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("abandon-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("allow-field"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--field", required=True); p.add_argument("--evidence-ref", required=True)
     p = sub.add_parser("preflight"); p.add_argument("--candidate"); p.add_argument("--state"); p.add_argument("--root-alpha-id")
@@ -2637,6 +2708,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "exhaust-focus": out = StateStore(args.state, args.root_alpha_id).exhaust_focus(args.reason, args.evidence_ref)
         elif args.cmd == "finish-run": out = StateStore(args.state, args.root_alpha_id).finish_run(args.status, args.reason)
         elif args.cmd == "open-hypothesis": out = StateStore(args.state, args.root_alpha_id).open_hypothesis(args.id, _load_json_arg(args.contract))
+        elif args.cmd == "withdraw-hypothesis": out = StateStore(args.state, args.root_alpha_id).withdraw_hypothesis(args.hypothesis_id, args.reason)
         elif args.cmd == "abandon-hypothesis": out = StateStore(args.state, args.root_alpha_id).abandon_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
         elif args.cmd == "allow-field": out = StateStore(args.state, args.root_alpha_id).allow_field(args.field, args.evidence_ref)
         elif args.cmd == "preflight":

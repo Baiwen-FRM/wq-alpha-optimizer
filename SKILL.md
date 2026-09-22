@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.6.0
+  version: 3.6.1
 ---
 
 # WQ Alpha Optimizer
@@ -20,6 +20,7 @@ metadata:
 - **Optimize hypotheses, not numbers.** 没有证据支持的问题，不用 simulation 去“找答案”；禁止 dense grid、magic-number search 和 winner-only 叙事。
 - **Same thesis / existing scope.** 普通 candidate 必须留在当前 Alpha 的既有 thesis/scope 内；锁定字段、新字段准入和 scope boundary 由 `references/runtime/candidate-contract.md` 统一定义。用户若要求比较 scope 变量，结束当前 candidate path 并记录 scope boundary。
 - **Minimal causal change.** 一次实验只回答一个 principal mechanism；复杂度增加必须由该机制解释。
+- **Preflight errors are recoverable before transport.** hypothesis 冻结后若 candidate preflight 在 reserve 之前发现 contract omission（例如漏写 `complexity_reason` / `field_change_reason`），不要伪造 transport failure、不要手改 state，也不要关闭 route。使用 Guard 的 `withdraw-hypothesis` 保留旧 hypothesis 审计记录，再用新 hypothesis ID 冻结修正后的 contract；一旦 reserve 已发生则禁止此路径。
 - **Progress, then re-plan.** Hypothesis support 判断的是预声明的 mechanism prediction，不要求每一步 candidate 直接把最终平台 blocker 从 FAIL 变 PASS。若 directional improvement 满足 success/protection contract 且没有新 blocker，可以 promotion 为新的 Incumbent；随后必须 fresh re-profile/re-plan。Root 始终 immutable，用于控制 drift。
 - **Result facts before conclusions.** 平台结果/check evidence 先于“成功/失败”叙事；指标变好本身不等于机制得到支持。
 - **Stop is a valid outcome.** 当前 scope 内没有新的合理可证伪问题时停止，而不是扩大自由度；但如果一个当前 scope 内可取得的 diagnostic 能实质区分机制，必须先完成/复用该诊断，不能把“还没诊断”写成 evidence exhaustion。

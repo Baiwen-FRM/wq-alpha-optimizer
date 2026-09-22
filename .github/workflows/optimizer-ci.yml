@@ -29,6 +29,7 @@ jobs:
       - name: CLI smoke test
         run: |
           python scripts/optimizer_guard.py --help >/dev/null
+          python scripts/optimizer_guard.py withdraw-hypothesis --help >/dev/null
           python scripts/bootstrap_run.py --help >/dev/null
           python scripts/wq_lab_provider.py --help >/dev/null
           python scripts/mechanism_synthesis.py --help >/dev/null

@@ -755,5 +755,77 @@ class CoreGuardTests(TestCase):
         self.assertNotIn("stale writer", texts)
 
 
+    def test_preflight_contract_error_can_withdraw_before_reservation_and_retry(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+
+        incomplete_contract = self._contract()
+        incomplete_contract.pop("complexity_reason")
+        opened = self.store.open_hypothesis("H1", incomplete_contract)
+        self.assertTrue(opened["ok"], opened)
+
+        candidate = self._candidate(
+            expression="rank(rank(close))",
+            hypothesis_id="H1",
+        )
+        rejected = self.store.reserve_simulation(candidate)
+        self.assertFalse(rejected["allowed"])
+        self.assertEqual(rejected["reason"], "COMPLEXITY_GROWTH_NOT_PREDECLARED")
+
+        state = self.store.read()
+        self.assertIsNone(state["hypotheses"]["H1"]["candidate_fingerprint"])
+        self.assertEqual(state["simulations"], {})
+        self.assertEqual(state["candidates"], {})
+
+        withdrawn = self.store.withdraw_hypothesis(
+            "H1",
+            "Preflight found missing complexity_reason before any reservation or POST.",
+        )
+        self.assertTrue(withdrawn["ok"], withdrawn)
+        self.assertEqual(withdrawn["status"], "WITHDRAWN")
+        self.assertEqual(
+            self.store.read()["hypotheses"]["H1"]["result"]["disposition"],
+            "WITHDRAWN_BEFORE_RESERVATION",
+        )
+
+        reopened = self.store.open_hypothesis("H2", self._contract())
+        self.assertTrue(reopened["ok"], reopened)
+        corrected_candidate = self._candidate(
+            expression="rank(rank(close))",
+            hypothesis_id="H2",
+        )
+        reserved = self.store.reserve_simulation(corrected_candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+
+    def test_hypothesis_withdrawal_is_forbidden_after_reservation_even_if_released(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        self._open_hypothesis()
+
+        candidate = self._candidate(expression="rank(-close)")
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+
+        blocked = self.store.withdraw_hypothesis(
+            "H1",
+            "Do not permit contract rewriting after candidate binding.",
+        )
+        self.assertFalse(blocked["ok"])
+        self.assertEqual(blocked["reason"], "HYPOTHESIS_ALREADY_BOUND_TO_CANDIDATE")
+
+        released = self.store.release_reservation(
+            reserved["fingerprint"],
+            "Confirmed no POST; release transport reservation.",
+        )
+        self.assertTrue(released["ok"], released)
+
+        still_blocked = self.store.withdraw_hypothesis(
+            "H1",
+            "Release must not unfreeze the already-bound hypothesis.",
+        )
+        self.assertFalse(still_blocked["ok"])
+        self.assertEqual(still_blocked["reason"], "HYPOTHESIS_ALREADY_BOUND_TO_CANDIDATE")
+
+
 if __name__ == "__main__":
     main()
