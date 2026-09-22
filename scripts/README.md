@@ -10,6 +10,8 @@ CLI：
 python3 scripts/optimizer_guard.py --help
 ```
 
+`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Optional chart payloads are written as stdlib-only SVG files under `logs/assets/` and referenced relatively from the run MD; no plotting dependency is required.
+
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
 `set-plan --final-replan` is accepted only after all routes in the current plan
