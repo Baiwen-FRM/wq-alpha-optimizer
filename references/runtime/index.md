@@ -9,3 +9,5 @@
 - `regional.md`：当前 region/delay/universe 的诊断语境。
 - `thresholds.md`：平台 check/limit/evidence/readiness 的读取口径。
 - `report-templates.md`：可读报告布局。
+
+- `wq-lab-provider.md` — local WQ Lab BRAIN I/O boundary and deterministic intake contract.
