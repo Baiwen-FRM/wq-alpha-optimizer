@@ -11,6 +11,17 @@ import optimizer_guard as guard
 def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
     blockers = guard._current_blockers(state)
     revision = int(state.get("evidence_revision", 0))
+    incumbent = state.get("incumbent") if isinstance(state.get("incumbent"), dict) else {}
+    dashboard = state.get("dashboard_context") if isinstance(state.get("dashboard_context"), dict) else {}
+    run = state.get("run") if isinstance(state.get("run"), dict) else {}
+
+    raw_intake_path = None
+    if run.get("log_path") and run.get("run_id"):
+        log_path = Path(str(run["log_path"]))
+        candidate = log_path.parent / ".data" / str(run["run_id"]) / "intake.json"
+        if candidate.exists():
+            raw_intake_path = str(candidate)
+
     available_evidence = [
         {
             "id": evidence_id,
@@ -49,8 +60,16 @@ def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {
-        "incumbent_alpha_id": str((state.get("incumbent") or {}).get("alpha_id") or ""),
+        "incumbent_alpha_id": str(incumbent.get("alpha_id") or ""),
         "based_on_evidence_revision": revision,
+        "context": {
+            "expression": incumbent.get("expression"),
+            "settings": incumbent.get("settings"),
+            "result_evidence": incumbent.get("result_evidence"),
+            "fields": dashboard.get("fields", []),
+            "visualization": dashboard.get("visualization", {}),
+            "raw_intake_path": raw_intake_path,
+        },
         "blockers": rows,
         "available_evidence": available_evidence,
         "instructions": {
