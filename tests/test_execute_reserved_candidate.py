@@ -455,5 +455,24 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertEqual(wq.start_calls, 1)
 
 
+    def test_deterministic_guard_evaluate_failure_is_not_marked_resumable(self):
+        wq = SequenceWQ(
+            [FakeResponse(201, location="/simulations/S7")],
+            [{"status": "done", "alpha_id": "CHILD"}],
+        )
+        with patch.object(
+            self.store,
+            "evaluate_result",
+            return_value={"ok": False, "reason": "SIMULATION_ID_MISMATCH"},
+        ):
+            result = executor.execute_reserved_candidate(self.store, wq, object())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "EVALUATE_FAILED")
+        self.assertFalse(result["resumable"])
+        self.assertEqual(result["evaluation"]["reason"], "SIMULATION_ID_MISMATCH")
+        self.assertEqual(wq.start_calls, 1)
+
+
+
 if __name__ == "__main__":
     main()
