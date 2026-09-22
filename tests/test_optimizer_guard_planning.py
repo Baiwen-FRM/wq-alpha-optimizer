@@ -383,7 +383,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         close_ref = self._post_activation_evidence("E_CLOSE_ONCE")
         self.store.exhaust_focus("R1 exhausted.", close_ref)
-        self.assertTrue(self.store.set_plan({"routes": []}, final_replan=True)["ok"])
+        self.assertTrue(self.store.set_plan(self._no_action_plan("E_NO_ACTION_ONCE"), final_replan=True)["ok"])
         result = self.store.set_plan({"routes": []}, final_replan=True)
         self.assertEqual(result["reason"], "FINAL_REPLAN_ALREADY_USED")
 
@@ -647,7 +647,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus(route_id="R3")
         close_ref = self._post_activation_evidence("E_CLOSE_NEW_INCUMBENT")
         self.store.exhaust_focus("The new incumbent route is exhausted.", close_ref)
-        one_more = self.store.set_plan({"routes": []}, final_replan=True)
+        one_more = self.store.set_plan(self._no_action_plan("E_NO_ACTION_NEW_INCUMBENT"), final_replan=True)
         self.assertTrue(one_more["ok"], one_more)
 
     def test_legacy_set_plan_upgrades_to_v1_binding(self):
@@ -693,7 +693,7 @@ class PlanningGuardTests(TestCase):
         )
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
 
-        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        final_replan = self.store.set_plan(self._no_action_plan("E_NO_ACTION_CHILD_FINAL"), final_replan=True)
         self.assertTrue(final_replan["ok"], final_replan)
         self.assertTrue(final_replan["plan"]["final_replan_used"])
 
@@ -705,14 +705,28 @@ class PlanningGuardTests(TestCase):
 
 
 
-    def test_initial_empty_plan_can_reach_exhaustion_without_fabricated_route(self):
-        empty = self.store.set_plan({"routes": []})
+    def test_initial_empty_plan_requires_evidence_method_no_action_proof(self):
+        missing = self.store.set_plan({"routes": []})
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["reason"], "SYNTHESIS_CONTRACT")
+
+        plausible = self._plan(
+            ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "A falsifiable probe remains.")
+        )
+        plausible["routes"] = []
+        testable = self.store.set_plan(plausible)
+        self.assertFalse(testable["ok"])
+        self.assertEqual(testable["reason"], "EMPTY_PLAN_HAS_TESTABLE_MECHANISM")
+
+        empty = self.store.set_plan(self._no_action_plan("E_NO_ACTION_INITIAL"))
         self.assertTrue(empty["ok"], empty)
         self.assertEqual(empty["plan"]["status"], "EXHAUSTED")
-        self.assertEqual(empty["plan"]["routes"], [])
         blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No justified normal route exists.")
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
-        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        final_replan = self.store.set_plan(
+            self._no_action_plan("E_NO_ACTION_INITIAL_FINAL"),
+            final_replan=True,
+        )
         self.assertTrue(final_replan["ok"], final_replan)
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
         self.assertTrue(finished["ok"], finished)
