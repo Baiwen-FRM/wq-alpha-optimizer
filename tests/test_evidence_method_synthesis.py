@@ -759,6 +759,71 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(rejected["reason"], "EMPTY_PLAN_METHOD_SPACE_UNASSESSED")
 
 
+    def test_suffixed_known_check_routes_to_canonical_family(self):
+        entry = guard._catalog_entry_for_blocker("LOW_ROBUST_UNIVERSE_SHARPE.WITH_RATIO")
+        self.assertEqual(entry["target"], "ROBUST_UNIVERSE")
+        self.assertEqual(entry["owner"], "optimization/robust-universe.md")
+        families = {row["method_family"] for row in entry["mechanisms"]}
+        self.assertIn("exposure_or_investability_control", families)
+
+    def test_unrelated_candidate_result_cannot_exclude_another_mechanism(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        unrelated = self._evidence(
+            store,
+            "E_UNRELATED_RESULT",
+            "CANDIDATE_RESULT",
+            "other_mechanism",
+            "A different mechanism candidate was evaluated and refuted.",
+            source="BRAIN:evaluate_result",
+        )
+        row = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_BAD_RESULT_EXCLUSION",
+                    "noise_persistence_mismatch",
+                    "temporal_aggregation_or_smoothing",
+                    "EXCLUDED",
+                    [unrelated],
+                    exclusion_basis="CURRENT_CANDIDATE_RESULT",
+                )
+            ],
+            [unrelated],
+        )
+        rejected = store.set_plan(self._plan(store, [row], []))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "SYNTHESIS_CONTRACT")
+        self.assertIn("mechanism/method-family-specific", rejected["detail"])
+
+    def test_scope_boundary_cannot_be_reused_to_exclude_unrelated_family(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        boundary = self._evidence(
+            store,
+            "E_SCOPE",
+            "SCOPE_BOUNDARY",
+            "new_dataset_only",
+            "A new dataset would cross the locked optimization scope.",
+            source="USER:scope",
+        )
+        row = self._blocker_row(
+            "LOW_SHARPE",
+            [
+                self._assessment(
+                    "A_BAD_SCOPE_EXCLUSION",
+                    "cross_sectional_exposure",
+                    "grouping_or_neutralization",
+                    "EXCLUDED",
+                    [boundary],
+                    exclusion_basis="SCOPE_BOUNDARY",
+                )
+            ],
+            [boundary],
+        )
+        rejected = store.set_plan(self._plan(store, [row], []))
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "SYNTHESIS_CONTRACT")
+
+
 if __name__ == "__main__":
     import unittest
 
