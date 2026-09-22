@@ -165,15 +165,17 @@ class PlanningGuardTests(TestCase):
     def _no_action_plan(self, evidence_id="E_NO_ACTION"):
         state = self.store.read()
         if evidence_id not in state["evidence"]:
-            self._evidence(
-                evidence_id,
-                "NO_ACTION",
-                "BRAIN:test_diagnostic",
-                "Current diagnostic evidence excludes the remaining in-scope mechanism families.",
+            registered = self.store.register_evidence(
+                {
+                    "id": evidence_id,
+                    "kind": "DIAGNOSTIC_EXCLUSION",
+                    "subject": "NO_ACTION",
+                    "source": "BRAIN:test_diagnostic",
+                    "observed_at": guard._now_iso(),
+                    "claim": "Current diagnostic evidence excludes the remaining in-scope mechanism families.",
+                }
             )
-            state = self.store.read()
-            state["evidence"][evidence_id]["kind"] = "DIAGNOSTIC_EXCLUSION"
-            self.store._write(state)
+            self.assertTrue(registered["ok"], registered)
         rows = []
         for blocker in guard._current_blockers(self.store.read()):
             entry = guard._catalog_entry_for_blocker(blocker)
