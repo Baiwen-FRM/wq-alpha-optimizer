@@ -502,6 +502,79 @@ def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
+def _route_candidate_result_count(state: Dict[str, Any], route_id: str, incumbent_alpha_id: str | None = None) -> int:
+    count = 0
+    for candidate in state.get("candidates", {}).values():
+        if not isinstance(candidate, dict) or candidate.get("route_id") != route_id:
+            continue
+        spec = candidate.get("spec") if isinstance(candidate.get("spec"), dict) else {}
+        if incumbent_alpha_id is not None and str(spec.get("parent_id")) != str(incumbent_alpha_id):
+            continue
+        if candidate.get("result_evaluation") is not None:
+            count += 1
+    return count
+
+
+def _novel_post_activation_evidence(
+    state: Dict[str, Any],
+    evidence_ref: str | None,
+    activated_at_evidence_revision: int,
+) -> Dict[str, Any] | None:
+    if not evidence_ref:
+        return None
+    evidence = state.get("evidence", {}).get(evidence_ref)
+    if not isinstance(evidence, dict):
+        return None
+    if int(evidence.get("revision", 0)) <= int(activated_at_evidence_revision):
+        return None
+    prior_fingerprints = {
+        row.get("content_fingerprint") or _evidence_fingerprint(row)
+        for row in state.get("evidence", {}).values()
+        if isinstance(row, dict) and int(row.get("revision", 0)) <= int(activated_at_evidence_revision)
+    }
+    fingerprint = evidence.get("content_fingerprint") or _evidence_fingerprint(evidence)
+    if fingerprint in prior_fingerprints:
+        return None
+    return evidence
+
+
+def _route_closure_rejection(
+    state: Dict[str, Any],
+    route: Dict[str, Any],
+    *,
+    evidence_ref: str | None = None,
+    plan: Dict[str, Any] | None = None,
+) -> Dict[str, Any] | None:
+    plan = plan or state.get("optimization_plan") or {}
+    incumbent_alpha_id = plan.get("incumbent_alpha_id") or (state.get("incumbent") or {}).get("alpha_id")
+    result_count = _route_candidate_result_count(state, str(route.get("id")), incumbent_alpha_id)
+    if result_count > 0:
+        return None
+
+    activated_revision = int(
+        route.get(
+            "activated_at_evidence_revision",
+            plan.get("based_on_evidence_revision", state.get("evidence_revision", 0)),
+        )
+    )
+    evidence = _novel_post_activation_evidence(state, evidence_ref, activated_revision)
+    if evidence is not None:
+        return None
+
+    return {
+        "ok": False,
+        "reason": "ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE",
+        "route_id": route.get("id"),
+        "candidate_result_count": result_count,
+        "activated_at_evidence_revision": activated_revision,
+        "current_evidence_revision": int(state.get("evidence_revision", 0)),
+        "required": (
+            "At least one evaluated candidate Result bound to this route, or an explicit "
+            "evidence_ref for genuinely new post-activation diagnostic evidence."
+        ),
+    }
+
+
 def _normalize_plan_route(route: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(route, dict):
         raise ValueError("plan route must be an object")
@@ -1274,6 +1347,9 @@ class StateStore:
             routes[0]["status"] = "ACTIVE"
         for priority, route in enumerate(routes, start=1):
             route["priority"] = priority
+            if route.get("status") == "ACTIVE":
+                route.setdefault("activated_at_evidence_revision", int(state.get("evidence_revision", 0)))
+            route.setdefault("candidate_result_count", 0)
 
         # Exhaustion/reopen history is scoped to the current Incumbent cycle.
         # A promoted Incumbent is a materially new parent and may legitimately
@@ -1363,11 +1439,13 @@ class StateStore:
         if active:
             return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS", "route_id": active[0].get("id")}
         target["status"] = "ACTIVE"
+        target["activated_at_evidence_revision"] = int(state.get("evidence_revision", 0))
+        target.setdefault("candidate_result_count", 0)
         plan["status"] = "ACTIVE"
         self._write(state)
         return {"ok": True, "route": target, "plan": plan}
 
-    def close_route(self, route_id: str, status: str, reason: str) -> Dict[str, Any]:
+    def close_route(self, route_id: str, status: str, reason: str, evidence_ref: str | None = None) -> Dict[str, Any]:
         status = status.upper()
         if status not in {"DISMISSED", "COMPLETED"} or not route_id.strip() or not reason.strip():
             return {"ok": False, "reason": "ROUTE_CLOSE_CONTRACT"}
@@ -1390,14 +1468,27 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_ROUTE", "route_id": route_id}
         if route.get("status") not in {"ACTIVE", "PENDING"}:
             return {"ok": False, "reason": "ROUTE_NOT_OPEN", "status": route.get("status")}
+        if route.get("status") == "ACTIVE":
+            closure_rejection = _route_closure_rejection(
+                state, route, evidence_ref=evidence_ref, plan=plan
+            )
+            if closure_rejection:
+                return closure_rejection
         was_active = route.get("status") == "ACTIVE"
         route["status"] = status
         route["close_reason"] = reason.strip()
         route["closed_at_evidence_revision"] = state.get("evidence_revision", 0)
+        route["candidate_result_count"] = _route_candidate_result_count(
+            state, str(route.get("id")), plan.get("incumbent_alpha_id")
+        )
+        if evidence_ref:
+            route["zero_candidate_closure_evidence_ref"] = evidence_ref
         if was_active:
             for pending in plan.get("routes", []):
                 if pending.get("status") == "PENDING":
                     pending["status"] = "ACTIVE"
+                    pending["activated_at_evidence_revision"] = int(state.get("evidence_revision", 0))
+                    pending.setdefault("candidate_result_count", 0)
                     break
         plan["status"] = "ACTIVE" if any(item.get("status") in {"PENDING", "ACTIVE"} for item in plan.get("routes", [])) else "EXHAUSTED"
         self._write(state)
@@ -1498,7 +1589,7 @@ class StateStore:
         self._write(state)
         return {"ok": True, "already_open": False, "focus": state["focus"]}
 
-    def exhaust_focus(self, reason: str) -> Dict[str, Any]:
+    def exhaust_focus(self, reason: str, evidence_ref: str | None = None) -> Dict[str, Any]:
         if not reason.strip():
             return {"ok": False, "reason": "EXHAUST_REASON_REQUIRED"}
         state = self.read()
@@ -1514,23 +1605,38 @@ class StateStore:
         open_h = [k for k, v in state.get("hypotheses", {}).items() if v.get("status") == "OPEN" and v.get("focus_revision") == focus.get("revision")]
         if open_h:
             return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": open_h}
+        plan = state.get("optimization_plan")
+        route_id = focus.get("route_id")
+        if isinstance(plan, dict) and route_id:
+            route = next((item for item in plan.get("routes", []) if item.get("id") == route_id), None)
+            if route and route.get("status") == "ACTIVE":
+                closure_rejection = _route_closure_rejection(
+                    state, route, evidence_ref=evidence_ref, plan=plan
+                )
+                if closure_rejection:
+                    return closure_rejection
         focus["status"] = "EVIDENCE_EXHAUSTED"
         focus["exhaust_reason"] = reason
         focus["closed_at_evidence_revision"] = state.get("evidence_revision", 0)
         state["focus"] = focus
         next_route = None
         final_replan_required = False
-        plan = state.get("optimization_plan")
-        route_id = focus.get("route_id")
         if plan and route_id:
             route = next((item for item in plan.get("routes", []) if item.get("id") == route_id), None)
             if route and route.get("status") == "ACTIVE":
                 route["status"] = "EXHAUSTED"
                 route["close_reason"] = reason.strip()
                 route["closed_at_evidence_revision"] = state.get("evidence_revision", 0)
+                route["candidate_result_count"] = _route_candidate_result_count(
+                    state, str(route.get("id")), plan.get("incumbent_alpha_id")
+                )
+                if evidence_ref:
+                    route["zero_candidate_closure_evidence_ref"] = evidence_ref
             next_route = next((item for item in plan.get("routes", []) if item.get("status") == "PENDING"), None)
             if next_route:
                 next_route["status"] = "ACTIVE"
+                next_route["activated_at_evidence_revision"] = int(state.get("evidence_revision", 0))
+                next_route.setdefault("candidate_result_count", 0)
                 plan["status"] = "ACTIVE"
             else:
                 plan["status"] = "EXHAUSTED"
@@ -1596,6 +1702,7 @@ class StateStore:
             "contract": normalized,
             "status": "OPEN",
             "focus_revision": focus.get("revision"),
+            "route_id": focus.get("route_id"),
             "opened_at_evidence_revision": state.get("evidence_revision", 0),
             "candidate_fingerprint": None,
             "result": None,
@@ -1659,7 +1766,12 @@ class StateStore:
         rec["hypothesis_id"] = hid
         rec.setdefault("history", []).append({"status": "RESERVED", "at": _now_iso()})
         state["simulations"][fp] = rec
-        state["candidates"][fp] = {"spec": candidate, "preflight": pre, "status": "RESERVED"}
+        state["candidates"][fp] = {
+            "spec": candidate,
+            "preflight": pre,
+            "status": "RESERVED",
+            "route_id": hyp.get("route_id"),
+        }
         self._write(state)
         return {"allowed": True, "reason": None, "fingerprint": fp, "preflight": pre}
 
@@ -1829,6 +1941,14 @@ class StateStore:
         state["hypotheses"][hid] = hyp
         state["candidates"][fp]["result_evaluation"] = evaluation
         state["candidates"][fp]["result_alpha_id"] = str(result_evidence["alpha_id"])
+        route_id = state["candidates"][fp].get("route_id") or hyp.get("route_id")
+        plan = state.get("optimization_plan")
+        if route_id and isinstance(plan, dict):
+            route = next((item for item in plan.get("routes", []) if item.get("id") == route_id), None)
+            if route is not None:
+                route["candidate_result_count"] = _route_candidate_result_count(
+                    state, str(route_id), plan.get("incumbent_alpha_id")
+                )
         self._write(state)
         return {"ok": True, "hypothesis_id": hid, "status": evaluation["status"], "evaluation": evaluation}
 
@@ -1998,9 +2118,9 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("refresh-incumbent"); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("set-plan"); p.add_argument("--plan", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--final-replan", action="store_true")
     p = sub.add_parser("activate-route"); p.add_argument("--route-id", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
-    p = sub.add_parser("close-route"); p.add_argument("--route-id", required=True); p.add_argument("--status", required=True, choices=["DISMISSED", "COMPLETED"]); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("close-route"); p.add_argument("--route-id", required=True); p.add_argument("--status", required=True, choices=["DISMISSED", "COMPLETED"]); p.add_argument("--reason", required=True); p.add_argument("--evidence-ref"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("set-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--type", required=True); p.add_argument("--owner", required=True); p.add_argument("--target", required=True); p.add_argument("--blocker"); p.add_argument("--route-id"); p.add_argument("--evidence-ref", action="append", required=True)
-    p = sub.add_parser("exhaust-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("exhaust-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--evidence-ref")
     p = sub.add_parser("finish-run"); p.add_argument("--status", required=True, choices=sorted(RUN_TERMINAL_STATUSES)); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("open-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--id", required=True); p.add_argument("--contract", required=True)
     p = sub.add_parser("abandon-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
@@ -2024,9 +2144,9 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "refresh-incumbent": out = StateStore(args.state, args.root_alpha_id).refresh_incumbent_result(_load_json_arg(args.result))
         elif args.cmd == "set-plan": out = StateStore(args.state, args.root_alpha_id).set_plan(_load_json_arg(args.plan), final_replan=args.final_replan)
         elif args.cmd == "activate-route": out = StateStore(args.state, args.root_alpha_id).activate_route(args.route_id)
-        elif args.cmd == "close-route": out = StateStore(args.state, args.root_alpha_id).close_route(args.route_id, args.status, args.reason)
+        elif args.cmd == "close-route": out = StateStore(args.state, args.root_alpha_id).close_route(args.route_id, args.status, args.reason, args.evidence_ref)
         elif args.cmd == "set-focus": out = StateStore(args.state, args.root_alpha_id).set_focus(args.type, args.owner, args.target, args.evidence_ref, args.blocker, args.route_id)
-        elif args.cmd == "exhaust-focus": out = StateStore(args.state, args.root_alpha_id).exhaust_focus(args.reason)
+        elif args.cmd == "exhaust-focus": out = StateStore(args.state, args.root_alpha_id).exhaust_focus(args.reason, args.evidence_ref)
         elif args.cmd == "finish-run": out = StateStore(args.state, args.root_alpha_id).finish_run(args.status, args.reason)
         elif args.cmd == "open-hypothesis": out = StateStore(args.state, args.root_alpha_id).open_hypothesis(args.id, _load_json_arg(args.contract))
         elif args.cmd == "abandon-hypothesis": out = StateStore(args.state, args.root_alpha_id).abandon_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
