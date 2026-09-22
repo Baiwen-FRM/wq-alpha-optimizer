@@ -220,15 +220,35 @@ def _recordset_names(listing: dict) -> list[str]:
 def _discover_recordsets(session, wq, alpha_id: str, attempts: int, sleep_seconds: float) -> tuple[dict, list[str]]:
     best_listing: dict = {}
     best_names: list[str] = []
+    previous_rich_names: list[str] | None = None
+    rich_stable_reads = 0
+
     for attempt in range(max(1, attempts)):
         listing = wq.get_alpha_recordsets(session, alpha_id)
         names = _recordset_names(listing)
         if len(names) > len(best_names):
             best_listing, best_names = listing, names
+
+        # Do not stop at the first rich recordset. Visualization recordsets can
+        # appear incrementally after the simulation resolves. Once a rich
+        # listing is observed twice unchanged, treat the currently available
+        # set as stable. If it never stabilizes within the bounded budget,
+        # return the largest listing observed rather than dropping late entries.
         if set(names) - BASE_RECORDSETS:
-            return listing, names
+            if names == previous_rich_names:
+                rich_stable_reads += 1
+            else:
+                rich_stable_reads = 1
+                previous_rich_names = list(names)
+            if rich_stable_reads >= 2:
+                return listing, names
+        else:
+            previous_rich_names = None
+            rich_stable_reads = 0
+
         if attempt + 1 < max(1, attempts) and sleep_seconds > 0:
             time.sleep(sleep_seconds)
+
     return best_listing, best_names
 
 
