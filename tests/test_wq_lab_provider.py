@@ -116,6 +116,38 @@ class WQLabProviderTests(TestCase):
         self.assertFalse(baseline["result_evidence"]["response_complete"])
         self.assertIn("checks_fallback", baseline["result_evidence"]["source"])
 
+    def test_result_evidence_snapshot_uses_current_result_and_dedicated_checks(self):
+        class FakeWQ:
+            @staticmethod
+            def get_result(session, alpha_id):
+                return {
+                    "id": alpha_id,
+                    "is": {
+                        "sharpe": 2.15,
+                        "fitness": 1.6,
+                        "turnover": 0.2,
+                    },
+                }
+
+            @staticmethod
+            def get_submission_check(session, alpha_id):
+                return {
+                    "is": {
+                        "checks": [
+                            {"name": "LOW_SHARPE", "result": "FAIL", "value": 2.15, "limit": 2.69}
+                        ]
+                    }
+                }
+
+        evidence = provider.result_evidence_snapshot(object(), FakeWQ, "CHILD", "/simulations/S1")
+        self.assertEqual(evidence["alpha_id"], "CHILD")
+        self.assertEqual(evidence["simulation_id"], "/simulations/S1")
+        self.assertEqual(evidence["metrics"]["sharpe"], 2.15)
+        self.assertEqual(evidence["checks"][0]["status"], "FAIL")
+        self.assertTrue(evidence["response_complete"])
+        self.assertTrue(evidence["authenticated"])
+        self.assertIn("get_submission_check", evidence["source"])
+
     def test_recordset_discovery_waits_for_stable_complete_listing(self):
         class FakeWQ:
             calls = 0
