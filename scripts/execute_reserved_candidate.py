@@ -142,6 +142,7 @@ def _transport_evidence(
             existing.get("kind") != kind
             or existing.get("subject") != hypothesis_id
             or existing.get("source") != source
+            or existing.get("claim") != claim
         ):
             raise RuntimeError(f"failure evidence id collision: {registered}")
     return evidence_id
@@ -253,7 +254,7 @@ def _evaluate_done_alpha(
             "stage": "EVALUATE_FAILED",
             "fingerprint": fingerprint,
             "evaluation": evaluated,
-            "resumable": True,
+            "resumable": False,
         }
 
     if evaluated.get("status") == "SUPPORTED":
