@@ -27,6 +27,8 @@ Root Baseline immutable；Incumbent 初始等于 Root。`PENDING` 是未知，�
 
 初始化 guard 时尽量把 Root 的 current Result/check snapshot 一并写入 `result_evidence`，这样后续 protected metric / new blocker 比较可以 machine-check。
 
+Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的可读投影，固定包含：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。字段 description/type/dataset/coverage/dateCoverage 可取得时补齐；没有 visualization 时明确写 unavailable/pending，不猜。
+
 ## Stage B — DIAGNOSE
 
 从 expression 建立最小必要映射：
@@ -48,7 +50,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 如果日志在 closeout 中写“继续需要某个当前 scope 内可取得的 diagnostic”，但本 run 并未尝试它，则不能把当前 run 归因于 `COMPLETED_WITH_EXHAUSTION`；先完成 diagnostic escalation。
 
-所有要驱动 machine decision 的诊断，先作为 evidence record 注册到 guard。
+所有要驱动 machine decision 的诊断，先作为 evidence record 注册到 guard。取得 visualization/recordsets 后，同时用 `update-dashboard` 把诊断 Alpha、recordset 列表、关键摘要和可画的数值序列更新到 MD 首页；PnL/ordered time series 优先 line chart，cap/sector/industry 等 bucket 比较优先 bar chart。图形只展示平台返回数据，不补点、不编造。
 
 ## Stage C — PROFILE / OPTIMIZATION PLAN
 
@@ -95,8 +97,8 @@ Primary reference 负责提出经济机制；guard contract 负责判断该实�
 
 Simulation 后先登记 raw Result/check evidence，再由 guard 按 `candidate-contract.md` 计算 hypothesis 状态。需要重新读取当前 Incumbent 的 fresh Result/checks（例如 promotion 后、终检前或平台状态更新后）时，使用 `refresh-incumbent`；任何用于新 plan 的 fresh facts 仍要另外注册 evidence refs。Controller 只根据 machine status 继续：
 
-- `SUPPORTED`：尝试 promotion；成功后回到 fresh diagnosis/routing，处理仍存在的 blocker 或按用户目标结束。
-- `REFUTED`：淘汰该 hypothesis；只有仍存在不同、未解决且 evidence-supported 的问题时才开下一 hypothesis。
+- `SUPPORTED`：尝试 promotion。这里的 supported 是**mechanism-level research progress**，不要求最终 blocker 已 PASS；promotion 后把 candidate 作为新的 Incumbent，旧 plan STALE，回到 fresh diagnosis/routing。若 blocker 仍存在，只能基于新 Incumbent 的新事实提出下一步，不得机械扫描相邻参数。
+- `REFUTED`：淘汰当前 frozen hypothesis/payload；不要自动把整个 mechanism family 标为 exhausted。只有该 mechanism 下已没有不同、未解决且 evidence-supported 的 falsifiable question 时才关闭 route。
 - `INCONCLUSIVE`：只有缺失信息能够被明确补齐时才 retest；否则停止该问题。
 - 当前 focus 已没有新的合理 question：`exhaust-focus`；guard 关闭当前 route，并自动激活下一个 pending route（如有）。
 - 没有 pending route 时，controller 先执行一次 final re-plan；只有 final re-plan 仍为空且没有 OPEN hypothesis/focus/ACTIVE route，且所有会 materially change routing 的可取得 in-scope diagnostics 已完成或明确 unavailable，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。若一个 route 从激活到 exhaustion **没有产生任何 hypothesis/candidate**，日志必须说明是哪个新诊断事实让它失去 actionability，或列出已复用且身份匹配的历史 negative evidence；不能只复述进入 route 前就已知的 blocker。
