@@ -12,6 +12,18 @@ Current platform `value / limit / status` is authoritative for `LOW_ROBUST_UNIVE
 - **Exposure / grouping mismatch**: country/industry/size exposure dominates subset performance → test one justified group/neutralization structure.
 - **Investability mismatch**: PnL/trading is concentrated where liquidity or scalable execution is poor → use a thesis-consistent liquidity/investability gate only if the needed fields are already in scope.
 
+## Diagnostic escalation
+
+在 Robust-Universe blocker 下，不要把“缺少 bucket/exposure evidence”本身当成 exhaustion。若 Root 当前只暴露基础 PnL/yearly recordsets，而 `visualization=true` 的同表达式、同 settings diagnostic control 可以提供 coverage / capitalization / sector / industry / liquidity 诊断，则先做这个 control，再决定 candidate family。
+
+优先取得能区分以下机制的最小证据：
+- coverage/dateCoverage 是否真的在 robust subset 崩塌；
+- capitalization/liquidity bucket 是否存在明确性能梯度；
+- sector/industry 是否有集中弱点；
+- PnL/Sharpe bucket 是否支持一个具体 investability/exposure hypothesis。
+
+只有这些诊断已经取得、历史同 Root 可审计地取得且仍适用，或平台经有界恢复后确实 unavailable，才允许进入“无 justified route / evidence exhausted”。
+
 ## Candidate families
 
 ### RU1 — Coverage repair
@@ -21,7 +33,7 @@ Distinguish **date coverage** from **stock-count coverage** before choosing `ts_
 Use verified winsorize/rank/quantile/tail/nonlinearity only when observed tails explain the subset failure. Choose any scale from current distribution/economic evidence; more aggressive tail compression is not automatically better.
 
 ### RU3 — Temporal persistence
-Use thesis-consistent smoothing/decay/rank/change-control only when refresh/horizon evidence supports it. Backfill and temporal windows can be non-monotonic across datasets/regions; do not assume longer is safer and do not sweep dense windows.
+Use thesis-consistent smoothing/decay/rank/change-control only when refresh/horizon evidence supports it. A Robust-Universe FAIL by itself is **not** evidence for changing simulation decay or temporal windows. Backfill and temporal windows can be non-monotonic across datasets/regions; do not assume longer is safer and do not sweep dense windows.
 
 ### RU4 — Exposure / grouping
 Country/industry/size-bucket neutralization or group comparison can be tested when the robust weakness maps to those exposures. Fine group structures must still retain enough names per group.
