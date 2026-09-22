@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.5.4
+# wq-alpha-optimizer v3.6.0
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -34,7 +34,7 @@ Run start → Root snapshot → Diagnose/Profile → Ordered Plan
    / USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE
 ```
 
-An empty Profile/Plan is a valid result when no justified route exists; the controller must not invent a route merely to keep searching. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
+An empty Profile/Plan is valid only after the evidence+method synthesis gate proves that every current blocker method family is either audibly excluded or has no unresolved discriminator; the controller must not invent a route merely to keep searching, but it also cannot use history summaries to skip unassessed method space. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
 
 
 ## v3.3.1 real-run hardening
@@ -100,3 +100,15 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - duplicate/timestamp-only/pre-plan evidence cannot satisfy the zero-candidate closure exception;
 - automatic activation of the next pending route stamps a new activation revision, so each route has its own attempt boundary;
 - exhaustion terminal performs a second route-history audit and rejects unaudited zero-candidate closures.
+
+
+## v3.6.0 evidence + method synthesis
+
+- mandatory intake facts and blocker repair references are now joined before planning instead of being treated as separate tracks;
+- each current blocker is assessed through its canonical method families using `ACTIONABLE / PLAUSIBLE_PROBE / NEEDS_DIAGNOSTIC / EXCLUDED`;
+- limited evidence no longer forces false certainty: a bounded discriminating experiment is legal through `PLAUSIBLE_PROBE`, while conflicting clues can require a targeted diagnostic;
+- routes must cite synthesis assessments and carry the evidence that made the mechanism testable; one upstream mechanism may explain multiple blockers only when each blocker has a compatible assessment;
+- historical “tried before” summaries cannot certify mechanism exhaustion or `EXCLUDED`;
+- normal non-empty plans remain lightweight and do not enumerate every method family;
+- an empty plan/final re-plan is deliberately strict: every current blocker method family must be assessed, with no remaining testable or diagnostic question;
+- the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
