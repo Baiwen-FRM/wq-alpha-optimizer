@@ -162,6 +162,48 @@ class PlanningGuardTests(TestCase):
             "routes": plan_routes,
         }
 
+    def _no_action_plan(self, evidence_id="E_NO_ACTION"):
+        state = self.store.read()
+        if evidence_id not in state["evidence"]:
+            self._evidence(
+                evidence_id,
+                "NO_ACTION",
+                "BRAIN:test_diagnostic",
+                "Current diagnostic evidence excludes the remaining in-scope mechanism families.",
+            )
+            state = self.store.read()
+            state["evidence"][evidence_id]["kind"] = "DIAGNOSTIC_EXCLUSION"
+            self.store._write(state)
+        rows = []
+        for blocker in guard._current_blockers(self.store.read()):
+            entry = guard._catalog_entry_for_blocker(blocker)
+            rows.append(
+                {
+                    "name": blocker,
+                    "target": entry["target"],
+                    "owner": entry["owner"],
+                    "observation_refs": [evidence_id],
+                    "mechanisms": [
+                        {
+                            "id": f"X_{blocker}_{index}_{evidence_id}",
+                            "mechanism": item["id"],
+                            "method_family": item["method_family"],
+                            "status": "EXCLUDED",
+                            "evidence_refs": [evidence_id],
+                            "reasoning": "Current diagnostic evidence excludes this mechanism in the test state.",
+                            "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                            "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                        }
+                        for index, item in enumerate(entry["mechanisms"], start=1)
+                    ],
+                }
+            )
+        return {
+            "based_on_evidence_revision": self.store.read()["evidence_revision"],
+            "synthesis": {"blockers": rows},
+            "routes": [],
+        }
+
     def _open_focus(self, route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE"):
         result = self.store.set_focus(
             "DEFECT",
@@ -326,7 +368,7 @@ class PlanningGuardTests(TestCase):
         self.store.exhaust_focus("R1 exhausted.", close_ref)
         blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No more routes.")
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
-        replan = self.store.set_plan({"routes": []}, final_replan=True)
+        replan = self.store.set_plan(self._no_action_plan("E_NO_ACTION_FINAL"), final_replan=True)
         self.assertTrue(replan["ok"], replan)
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
         self.assertTrue(finished["ok"], finished)
@@ -636,7 +678,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         self._promote_current_plan(child_id="CHILD_EMPTY_PLAN")
 
-        fresh = self.store.set_plan({"routes": []})
+        fresh = self.store.set_plan(self._no_action_plan())
         self.assertTrue(fresh["ok"], fresh)
         self.assertEqual(fresh["plan"]["status"], "EXHAUSTED")
         self.assertEqual(fresh["plan"]["incumbent_alpha_id"], "CHILD_EMPTY_PLAN")
