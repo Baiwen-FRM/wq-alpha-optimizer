@@ -17,6 +17,8 @@ Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `set-plan --final-replan` is accepted only after all routes in the current plan
 are terminal and can be used once per Incumbent cycle. Root or a legitimate STALE re-profile may install an empty EXHAUSTED plan only after the v2 synthesis contract provides a complete auditable no-action proof; a missing or merely historical method review cannot create an empty plan. `refresh-incumbent` updates the current authenticated Result/check snapshot and stales an existing plan when facts change.
 
+`withdraw-hypothesis` is the narrow pre-reservation correction path: it only works while an OPEN hypothesis has no candidate fingerprint and no candidate/simulation record. Use it when deterministic preflight finds a contract omission before reserve/POST. It records the old hypothesis as WITHDRAWN and requires a new hypothesis ID. It is deliberately blocked after reserve, including after RELEASED.
+
 `finish-run --status COMPLETED_WITH_EXHAUSTION` requires the final re-plan
 gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the current
 Incumbent check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
