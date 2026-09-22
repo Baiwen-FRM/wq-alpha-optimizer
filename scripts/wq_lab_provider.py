@@ -167,8 +167,12 @@ def visualization_snapshot(
     if not isinstance(details, dict) or not details:
         raise RuntimeError(f"Unable to read Alpha details for {alpha_id}")
 
+    root_visualization_enabled = bool(
+        isinstance(details.get("settings"), dict) and details["settings"].get("visualization")
+    )
+    root_attempts = max(1, discovery_attempts) if root_visualization_enabled else 1
     root_listing, root_names = _discover_recordsets(
-        session, wq, alpha_id, max(1, discovery_attempts), discovery_sleep_seconds
+        session, wq, alpha_id, root_attempts, discovery_sleep_seconds
     )
     diagnostic_alpha_id = alpha_id
     control = "existing Alpha recordsets"
