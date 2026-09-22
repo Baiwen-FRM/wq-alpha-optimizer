@@ -160,6 +160,72 @@ class PlanningGuardTests(TestCase):
         self.assertEqual(result["next_required_action"], "SET_FOCUS")
         self.assertEqual(result["active_route_id"], "R1")
 
+    def test_active_route_cannot_close_without_candidate_result_or_new_evidence(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        rejected = self.store.close_route("R1", "DISMISSED", "Do not allow plan-only dismissal.")
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE")
+        self.assertEqual(self.store.read()["optimization_plan"]["routes"][0]["status"], "ACTIVE")
+
+    def test_open_focus_cannot_exhaust_without_candidate_result_or_new_evidence(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        self._open_focus()
+        rejected = self.store.exhaust_focus("Do not allow zero-work exhaustion.")
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(rejected["reason"], "ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE")
+        self.assertEqual(self.store.read()["focus"]["status"], "OPEN")
+
+        close_ref = self._post_activation_evidence("E_INVALIDATES_R1")
+        closed = self.store.exhaust_focus("A new diagnostic invalidates the route.", close_ref)
+        self.assertTrue(closed["ok"], closed)
+        route = self.store.read()["optimization_plan"]["routes"][0]
+        self.assertEqual(route["status"], "EXHAUSTED")
+        self.assertEqual(route["zero_candidate_closure_evidence_ref"], close_ref)
+
+    def test_evaluated_candidate_result_satisfies_route_exhaustion_gate(self):
+        self.store.set_plan(
+            self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
+        )
+        self._open_focus()
+        opened = self.store.open_hypothesis("H_ROUTE_RESULT", self._hypothesis_contract())
+        self.assertTrue(opened["ok"], opened)
+        candidate = {
+            "parent_id": "ROOT",
+            "hypothesis_id": "H_ROUTE_RESULT",
+            "expression": "rank(-close)",
+            "fields": ["close"],
+            "settings": self.store.read()["incumbent"]["settings"],
+            "language": "FASTEXPR",
+        }
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fingerprint = reserved["fingerprint"]
+        self.assertTrue(self.store.record_transport(fingerprint, "POSTED", "SIM-ROUTE-RESULT")["ok"])
+        evaluated = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-REFUTED",
+                "simulation_id": "SIM-ROUTE-RESULT",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 1.9},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(evaluated["status"], "REFUTED", evaluated)
+        route = self.store.read()["optimization_plan"]["routes"][0]
+        self.assertEqual(route["candidate_result_count"], 1)
+
+        exhausted = self.store.exhaust_focus("The tested hypothesis was refuted and no distinct question remains.")
+        self.assertTrue(exhausted["ok"], exhausted)
+        self.assertEqual(self.store.read()["optimization_plan"]["routes"][0]["status"], "EXHAUSTED")
+
     def test_exhausting_focus_activates_pending_route_without_finishing_run(self):
         self.store.set_plan(
             self._plan(
