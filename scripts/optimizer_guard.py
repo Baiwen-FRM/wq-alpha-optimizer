@@ -1024,6 +1024,9 @@ class StateStore:
                         os.fsync(fh.fileno())
                     os.replace(tmp, self.path)
                     state["_state_revision"] = expected_revision + 1
+                    run = state.get("run") or {}
+                    if run.get("log_path"):
+                        Path(str(run["log_path"])).write_text(_render_run_log(state), encoding="utf-8")
                 finally:
                     if os.path.exists(tmp):
                         os.unlink(tmp)
