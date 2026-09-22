@@ -86,6 +86,58 @@ def _detail_checks(details: dict) -> list[dict]:
     return checks if isinstance(checks, list) else []
 
 
+def _guard_checks(details: dict) -> list[dict]:
+    rows = []
+    for item in _detail_checks(details):
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        status = item.get("status") or item.get("result")
+        if not status:
+            continue
+        row = dict(item)
+        row["name"] = str(item["name"])
+        row["status"] = str(status).upper()
+        row.pop("result", None)
+        rows.append(row)
+    return rows
+
+
+def _baseline_from_root(root: dict) -> dict:
+    details = root.get("details_raw") if isinstance(root.get("details_raw"), dict) else {}
+    expressions = root.get("expressions") if isinstance(root.get("expressions"), list) else []
+    if str(root.get("type") or "REGULAR").upper() != "REGULAR" or len(expressions) != 1:
+        raise RuntimeError("optimizer_guard FE baseline currently requires one REGULAR FASTEXPR expression")
+    settings = copy.deepcopy(root.get("settings") if isinstance(root.get("settings"), dict) else {})
+    for key in list(settings):
+        if str(key).lower() == "testperiod":
+            settings.pop(key)
+    return {
+        "alpha_id": root["alpha_id"],
+        "expression": expressions[0],
+        "fields": [row["field_id"] for row in root.get("fields", []) if isinstance(row, dict) and row.get("field_id")],
+        "settings": settings,
+        "language": str(settings.get("language") or "FASTEXPR"),
+        "result_evidence": {
+            "metrics": root.get("metrics") or {},
+            "checks": _guard_checks(details),
+            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "source": "BRAIN:wq_lib.get_result",
+            "response_complete": True,
+            "authenticated": True,
+        },
+    }
+
+
+def _dashboard_from_intake(root: dict, visualization: dict) -> dict:
+    fields = [
+        row["dashboard"]
+        for row in root.get("fields", [])
+        if isinstance(row, dict) and isinstance(row.get("dashboard"), dict)
+    ]
+    vis = visualization.get("dashboard_visualization") if isinstance(visualization, dict) else {}
+    return {"fields": fields, "visualization": vis if isinstance(vis, dict) else {}}
+
+
 def root_snapshot(session, wq, alpha_id: str) -> dict:
     details = wq.get_result(session, alpha_id)
     if not isinstance(details, dict) or not details:
@@ -244,7 +296,12 @@ def intake_snapshot(
         discovery_attempts=discovery_attempts,
         discovery_sleep_seconds=discovery_sleep_seconds,
     )
-    return {"root": root, "visualization": visualization}
+    return {
+        "root": root,
+        "visualization": visualization,
+        "baseline": _baseline_from_root(root),
+        "dashboard": _dashboard_from_intake(root, visualization),
+    }
 
 
 def _json_default(value: Any):
@@ -276,6 +333,8 @@ def main() -> None:
     p = sub.add_parser("intake")
     p.add_argument("--alpha-id", required=True)
     p.add_argument("--output")
+    p.add_argument("--baseline-output")
+    p.add_argument("--dashboard-output")
     p.add_argument("--discovery-attempts", type=int, default=4)
     p.add_argument("--discovery-sleep-seconds", type=float, default=2.0)
 
@@ -316,7 +375,25 @@ def main() -> None:
             discovery_attempts=args.discovery_attempts,
             discovery_sleep_seconds=args.discovery_sleep_seconds,
         )
-        _emit({"root": root, "visualization": vis}, args.output)
+        data = {
+            "root": root,
+            "visualization": vis,
+            "baseline": _baseline_from_root(root),
+            "dashboard": _dashboard_from_intake(root, vis),
+        }
+        if args.baseline_output:
+            Path(args.baseline_output).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.baseline_output).write_text(
+                json.dumps(data["baseline"], ensure_ascii=False, indent=2, default=_json_default) + "\n",
+                encoding="utf-8",
+            )
+        if args.dashboard_output:
+            Path(args.dashboard_output).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.dashboard_output).write_text(
+                json.dumps(data["dashboard"], ensure_ascii=False, indent=2, default=_json_default) + "\n",
+                encoding="utf-8",
+            )
+        _emit(data, args.output)
     elif args.cmd == "root-snapshot":
         _emit(root_snapshot(session, wq, args.alpha_id), args.output)
     elif args.cmd == "visualization-snapshot":
