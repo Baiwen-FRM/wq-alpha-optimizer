@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.5.3
+  version: 3.5.4
 ---
 
 # WQ Alpha Optimizer
@@ -27,6 +27,7 @@ metadata:
 - **Four mandatory intake surfaces.** 在第一次分析/评判前必须取得：① Expression + Settings；② current Result + submission checks；③ 实际使用 Data Field / Dataset 的 exact metadata；④ Visualization diagnostic 的完整当前可用 recordsets。若 Root 本身没有 rich recordsets，则用同 expression、同 settings、仅 `visualization=true` 做一次 diagnostic simulation，再读取平台列出的全部 available recordsets。平台暂时缺失/单个 recordset 不可读时记录 incomplete/unavailable，但不能把整块 visualization 静默跳过。
 - **Fresh facts invalidate stale execution.** Incumbent promotion 或显式 fresh Result/check refresh 后，旧 plan 不得继续机械执行；重新 Profile/Plan。旧 legacy run 只能完成已有在途工作，不能在未安装 v1 plan 时开启新的 focus/hypothesis。
 - **Focus exhaustion is not run exhaustion.** 当前 route 耗尽后切换下一个 pending route；Root/Incumbent profile 可以合法得到空 plan，不得为了继续而虚构 route。只有该 Incumbent cycle 的一次 final re-plan 也没有新 justified route 时，才以 exhaustion 结束 run。
+- **No zero-work route closure.** 一条 route 一旦成为 `ACTIVE`，不能只靠 planning 时已经存在的 blocker、历史实验或旧 evidence 立刻关闭。Guard 只允许两种正常关闭依据：①该 route 已产生至少一个绑定的 evaluated candidate Result；②route 激活之后出现了一个 fingerprint 实质新的 diagnostic evidence，并在 `close-route/exhaust-focus --evidence-ref` 中显式引用。否则返回 `ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE`。这条约束是 machine-enforced，不依赖 controller 自律。
 - **Terminal means terminal.** `SUBMISSION_READY` 必须由当前 Incumbent 的完整、认证、可审计 checks 证明；`USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，结束后不再改变 research state。
 
 ## Routing
