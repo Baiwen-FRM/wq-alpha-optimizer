@@ -27,4 +27,7 @@ jobs:
       - name: Compile checks
         run: python -m compileall -q scripts tests
       - name: CLI smoke test
-        run: python scripts/optimizer_guard.py --help >/dev/null
+        run: |
+          python scripts/optimizer_guard.py --help >/dev/null
+          python scripts/bootstrap_run.py --help >/dev/null
+          python scripts/wq_lab_provider.py --help >/dev/null
