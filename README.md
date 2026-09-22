@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.6.0
+# wq-alpha-optimizer v3.6.1
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -112,3 +112,8 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - normal non-empty plans remain lightweight and do not enumerate every method family;
 - an empty plan/final re-plan is deliberately strict: every current blocker method family must be assessed, with no remaining testable or diagnostic question;
 - the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
+
+
+## v3.6.1 pre-transport hypothesis recovery
+
+A deterministic candidate preflight failure no longer strands an OPEN hypothesis before any reservation exists. The new `withdraw-hypothesis` transition records the pre-reservation hypothesis as `WITHDRAWN`, keeps the active route/focus open, and allows a corrected contract to be frozen under a new hypothesis ID. The transition is blocked as soon as a candidate fingerprint/reservation exists, including after a reservation is released.
