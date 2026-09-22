@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Deterministic local guard/state helper for WQ Alpha Optimizer FE candidates.
 
-v3.3.0 principles:
+v3.4.0 principles:
 - Root is immutable; candidates must descend from the current Incumbent.
 - A focus (DEFECT or ENHANCEMENT) is explicit and can be evidence-exhausted.
 - A hypothesis freezes its whole falsifiable contract before simulation.
 - One hypothesis ID is permanently bound to one payload fingerprint.
 - Transport transitions are explicit; POSTED cannot be reopened.
 - Result classification/promotion use structured post-simulation evidence rather
-  than caller-supplied readiness booleans.
+  than caller-supplied readiness booleans; research support does not require final
+  submission-threshold passage.
+- Canonical run logs render a live dashboard before the append-only audit trail.
 - Fast Expression inspection uses a lightweight FE tokenizer instead of Python AST.
 
 The guard still cannot verify economic truth or live BRAIN semantics. It binds and
