@@ -77,21 +77,49 @@ class CoreGuardTests(TestCase):
 
     def _set_plan(self, store=None, *, mechanism="signal_quality", target="SHARPE", owner="optimization/sharpe.md", evidence="E1"):
         store = store or self.store
-        return store.set_plan(
-            {
-                "based_on_evidence_revision": store.read()["evidence_revision"],
-                "routes": [
+        state = store.read()
+        plan = {
+            "based_on_evidence_revision": state["evidence_revision"],
+            "routes": [
+                {
+                    "id": "R1",
+                    "target": target,
+                    "owner": owner,
+                    "mechanism": mechanism,
+                    "evidence_refs": [evidence],
+                    "rationale": "Current evidence supports this mechanism.",
+                }
+            ],
+        }
+        blockers = guard._current_blockers(state)
+        if blockers:
+            blocker = blockers[0]
+            entry = guard._catalog_entry_for_blocker(blocker)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = "A1"
+            plan["synthesis"] = {
+                "blockers": [
                     {
-                        "id": "R1",
+                        "name": blocker,
                         "target": target,
                         "owner": owner,
-                        "mechanism": mechanism,
-                        "evidence_refs": [evidence],
-                        "rationale": "Current evidence supports this mechanism.",
+                        "observation_refs": [evidence],
+                        "mechanisms": [
+                            {
+                                "id": assessment_id,
+                                "mechanism": mechanism,
+                                "method_family": method_family,
+                                "status": "PLAUSIBLE_PROBE",
+                                "evidence_refs": [evidence],
+                                "reasoning": "Current evidence plus the blocker method family justifies one falsifiable probe.",
+                                "next_question": "Does this mechanism improve the active target without protected-metric damage?",
+                            }
+                        ],
                     }
-                ],
+                ]
             }
-        )
+            plan["routes"][0]["assessment_refs"] = [assessment_id]
+        return store.set_plan(plan)
 
     def _open_focus(self, store=None, *, mechanism="signal_quality"):
         store = store or self.store
