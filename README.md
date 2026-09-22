@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.5.1
+# wq-alpha-optimizer v3.5.2
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -80,3 +80,13 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - every run persists raw intake, Guard baseline projection and Dashboard projection under `logs/.data/<run_id>/`;
 - WQ Lab capability mismatch fails before run creation; BRAIN/auth intake failure after run creation is written to the canonical audit log and stops the bootstrap;
 - low-level provider commands remain available only for debugging/recovery, preserving one stable normal execution order.
+
+
+## v3.5.2 lean execution correction
+
+- Root bootstrap is intentionally small: current Alpha facts, checks and exact metadata for fields actually used by the expression;
+- visualization/recordsets are no longer fetched for every run and are requested only when they can distinguish the active mechanism;
+- Profile/Plan are internal control state, not a user-facing stopping point: an actionable active route must continue in the same run to Focus → Hypothesis → Candidate → Simulation/Result;
+- live operator/schema checks happen only after a concrete candidate exists and only when that candidate changes signature-sensitive structure;
+- normal startup no longer writes separate intake/baseline/dashboard scratch projections under `/private/tmp` or `logs/.data`; canonical state/MD remain under ignored `logs/`;
+- fixed Dashboard rendering and the WQ Lab boundary remain unchanged.
