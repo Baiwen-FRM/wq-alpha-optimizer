@@ -148,6 +148,57 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(evidence["authenticated"])
         self.assertIn("get_submission_check", evidence["source"])
 
+    def test_result_evidence_filters_none_metrics_and_waits_for_pending_checks(self):
+        class FakeWQ:
+            @staticmethod
+            def get_result(session, alpha_id):
+                return {
+                    "id": alpha_id,
+                    "is": {
+                        "sharpe": 2.15,
+                        "fitness": None,
+                        "turnover": 0.2,
+                        "drawdown": None,
+                    },
+                }
+
+            @staticmethod
+            def get_submission_check(session, alpha_id):
+                return {
+                    "is": {
+                        "checks": [
+                            {"name": "LOW_SHARPE", "result": "PENDING"},
+                            {"name": "LOW_2Y_SHARPE", "result": "PASS"},
+                        ]
+                    }
+                }
+
+        evidence = provider.result_evidence_snapshot(object(), FakeWQ, "CHILD", "/simulations/S2")
+        self.assertEqual(evidence["metrics"], {"sharpe": 2.15, "turnover": 0.2})
+        self.assertFalse(evidence["response_complete"])
+        self.assertEqual(evidence["checks"][0]["status"], "PENDING")
+
+    def test_result_evidence_warning_is_terminal_but_left_for_policy_classification(self):
+        class FakeWQ:
+            @staticmethod
+            def get_result(session, alpha_id):
+                return {"id": alpha_id, "is": {"sharpe": 2.2, "fitness": 1.5}}
+
+            @staticmethod
+            def get_submission_check(session, alpha_id):
+                return {
+                    "is": {
+                        "checks": [
+                            {"name": "PROJECT_WARNING", "result": "WARNING"},
+                            {"name": "LOW_SHARPE", "result": "PASS"},
+                        ]
+                    }
+                }
+
+        evidence = provider.result_evidence_snapshot(object(), FakeWQ, "CHILD", "/simulations/S3")
+        self.assertTrue(evidence["response_complete"])
+        self.assertEqual(evidence["checks"][0]["status"], "WARNING")
+
     def test_recordset_discovery_waits_for_stable_complete_listing(self):
         class FakeWQ:
             calls = 0
