@@ -57,7 +57,7 @@ expression node → operator/transformation → field → dataset → idea role
 第一次正式 candidate 前，基于当前 Root/Incumbent 和本 run 已注册 evidence 建立一个可审计的 Alpha Profile，并生成持久的 mechanism-level plan：
 
 - 聚合 expression/settings、Result/checks、fields/dataset/type/coverage、PnL/时间稳定性、可用 exposure/concentration、expression structure 与历史实验；拿不到的内容写 unknown，不猜；
-- 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能审计到 candidate expression/settings/result/disposition；只有“以前试过”这种摘要不能自动继承 exhaustion。身份不匹配或事实漂移时，历史 run 只作背景，不阻止当前 run 重新诊断；
+- 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能审计到 candidate expression/settings/result/disposition **以及当时 frozen success/protection contract**；只有“以前试过”这种摘要不能自动继承 exhaustion。尤其不能把“candidate 有方向性改善但最终 check 仍 FAIL，所以当时被 REFUTED”的旧记录直接当成 mechanism-negative evidence；需要按当前 progressive contract 重新解释。身份不匹配、事实漂移或旧 contract 无法审计时，历史 run 只作背景，不阻止当前 run 重新诊断；
 - 每条 route 必须有 target、Primary owner、mechanism、evidence refs 和 rationale；operator 存在性不是 route evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“可能需要更多诊断”，先留在 DIAGNOSE，不要先建 route 再立刻 evidence-exhaust；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
