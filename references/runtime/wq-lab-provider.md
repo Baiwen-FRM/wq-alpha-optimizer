@@ -54,19 +54,21 @@ The normal optimizer entrypoint is:
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-`bootstrap_run.py` owns only lean Root startup: run creation, current Root facts, Guard initialization and Dashboard update. It calls the lower-level `wq_lab_provider.py` code rather than asking the controller to chain commands manually.
+`bootstrap_run.py` owns run creation, persistence, Guard initialization and Dashboard update. It calls the lower-level `wq_lab_provider.py` code rather than asking the controller to chain commands manually.
 
-The Root provider uses one authenticated WQ Lab session and always performs the same minimal BRAIN order:
+The provider layer uses one authenticated WQ Lab session and always performs the same BRAIN order:
 
 1. Alpha details;
 2. submission check;
 3. parse actual expression identifiers;
 4. exact `get_datafield` for each used field and select the matching region/delay/universe coverage row;
-5. build the Root baseline and fixed field Dashboard projection.
+5. inspect existing Alpha recordsets;
+6. if no rich visualization recordsets are present, create one same-expression/same-settings diagnostic with only `visualization=true`;
+7. discover recordsets with a bounded fixed retry policy;
+8. fetch each discovered recordset as raw schema/records;
+9. build deterministic dashboard field rows and chart specs.
 
-Visualization/recordsets are separate **on-demand diagnostics**. When current mechanism evidence requires them, the Skill may call `visualization_snapshot`: reuse rich recordsets if already present, otherwise create one same-expression/same-settings `visualization=true` control, discover recordsets with bounded retry, fetch them raw, then render deterministically. They are not part of every bootstrap.
-
-No separate intake/baseline/dashboard scratch files are required for normal startup; canonical machine state and the one canonical MD remain under `logs/`. The lower-level provider CLI remains available for debugging/recovery.
+The bootstrap stores all three under `logs/.data/<run_id>/`: `intake.json` is raw evidence, `baseline.json` is only the Guard initialization projection, and `dashboard.json` is only the deterministic presentation projection. The lower-level provider CLI remains available for debugging/recovery but is not the normal controller path.
 
 ## Visualization normalization
 
