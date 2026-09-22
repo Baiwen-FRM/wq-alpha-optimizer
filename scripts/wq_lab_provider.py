@@ -18,7 +18,7 @@ from recordset_dashboard import dashboard_visualization_from_recordsets
 BASE_RECORDSETS = {"pnl", "sharpe", "turnover", "daily-pnl", "yearly-stats"}
 
 
-def _load_wq_lib():
+def _load_wq_lib(*, require_submission_start: bool = False):
     try:
         module = importlib.import_module("wq_lib")
     except ImportError as exc:
@@ -26,11 +26,13 @@ def _load_wq_lib():
             "wq_lib is not importable in this Python environment. "
             "Install/use the local WQ Lab environment before running the optimizer."
         ) from exc
-    required = (
+    required = [
         "login", "get_result", "get_submission_check", "get_datafield",
         "get_alpha_recordsets", "get_alpha_recordset", "get_prod_corr",
         "get_self_corr", "get_operators", "simulate_single",
-    )
+    ]
+    if require_submission_start:
+        required.append("_start_simulation")
     missing = [name for name in required if not callable(getattr(module, name, None))]
     if missing:
         raise RuntimeError(
@@ -116,6 +118,45 @@ def _guard_checks(payload: dict) -> list[dict]:
         row.pop("result", None)
         rows.append(row)
     return rows
+
+
+def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> dict:
+    details = wq.get_result(session, alpha_id)
+    if not isinstance(details, dict) or not details:
+        return {
+            "alpha_id": alpha_id,
+            "simulation_id": simulation_id,
+            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "source": "BRAIN:wq_lib.get_result+get_submission_check",
+            "response_complete": False,
+            "authenticated": True,
+            "metrics": {},
+            "checks": [],
+        }
+
+    dedicated_payload = wq.get_submission_check(session, alpha_id)
+    dedicated_checks = _guard_checks(dedicated_payload if isinstance(dedicated_payload, dict) else {})
+    raw_metrics = _metrics(details)
+    metrics = {
+        key: value
+        for key, value in raw_metrics.items()
+        if not isinstance(value, bool) and isinstance(value, (int, float))
+    }
+    transient_statuses = {"PENDING", "UNKNOWN", "RUNNING", "PROCESSING"}
+    checks_terminal = bool(dedicated_checks) and all(
+        str(row.get("status") or "").upper() not in transient_statuses
+        for row in dedicated_checks
+    )
+    return {
+        "alpha_id": alpha_id,
+        "simulation_id": simulation_id,
+        "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source": "BRAIN:wq_lib.get_result+get_submission_check",
+        "response_complete": checks_terminal,
+        "authenticated": True,
+        "metrics": metrics,
+        "checks": dedicated_checks,
+    }
 
 
 def _baseline_from_root(root: dict) -> dict:
@@ -390,6 +431,11 @@ def main() -> None:
     p.add_argument("--alpha-id", required=True)
     p.add_argument("--output")
 
+    p = sub.add_parser("result-evidence")
+    p.add_argument("--alpha-id", required=True)
+    p.add_argument("--simulation-id", required=True)
+    p.add_argument("--output")
+
     p = sub.add_parser("visualization-snapshot")
     p.add_argument("--alpha-id", required=True)
     p.add_argument("--output")
@@ -445,6 +491,8 @@ def main() -> None:
         _emit(data, args.output)
     elif args.cmd == "root-snapshot":
         _emit(root_snapshot(session, wq, args.alpha_id), args.output)
+    elif args.cmd == "result-evidence":
+        _emit(result_evidence_snapshot(session, wq, args.alpha_id, args.simulation_id), args.output)
     elif args.cmd == "visualization-snapshot":
         _emit(
             visualization_snapshot(

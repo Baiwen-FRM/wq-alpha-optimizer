@@ -40,6 +40,18 @@ python3 scripts/mechanism_synthesis.py --state <STATE_PATH> --root-alpha-id <ROO
 
 The script only creates a deterministic blocker/method-family/evidence scaffold. It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required only when claiming an empty plan/exhaustion.
 
+## Reserved candidate executor
+
+After `optimizer_guard.py reserve` returns `allowed=true`, run:
+
+```text
+python3 scripts/execute_reserved_candidate.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
+```
+
+It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check evidence → evaluate → promote-if-SUPPORTED`. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. Re-running a POSTED candidate resumes by Location; it never sends a second POST. `SUBMITTING/AMBIGUOUS_POST` requires reconciliation rather than blind retry.
+
+Outputs with `resumable=true` are expected safe continuation states. The optimizer controller should call the same command again within the same run; the CLI exits successfully for these states. Do not re-bootstrap or manufacture a new candidate while a resumable fingerprint is active.
+
 ## Deterministic bootstrap
 
 Normal Root intake is a single command:

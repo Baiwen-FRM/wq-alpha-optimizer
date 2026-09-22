@@ -95,7 +95,12 @@ def _render_run_log(state: Dict[str, Any]) -> str:
 HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE", "WITHDRAWN"}
 FOCUS_TYPES = {"DEFECT", "ENHANCEMENT"}
 TRANSPORT_TRANSITIONS = {
+    # RESERVED direct transitions remain for compatibility with controllers that
+    # perform the external POST themselves. The Skill-owned executor uses the
+    # stricter RESERVED -> SUBMITTING -> ... path so a crash cannot trigger an
+    # automatic duplicate POST.
     "RESERVED": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
+    "SUBMITTING": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
     "AMBIGUOUS_POST": {"POSTED"},  # recovery discovers the original simulation; never repost
 }
 PLAN_ROUTE_STATUSES = {"PENDING", "ACTIVE", "EXHAUSTED", "DISMISSED", "COMPLETED"}
@@ -2306,6 +2311,8 @@ class StateStore:
                 pass
             elif status == "RESERVED":
                 return {"allowed": False, "reason": "RESERVED_RECOVERY_REQUIRED", "fingerprint": fp}
+            elif status == "SUBMITTING":
+                return {"allowed": False, "reason": "SUBMISSION_RECOVERY_REQUIRED", "fingerprint": fp}
             elif status == "AMBIGUOUS_POST":
                 return {"allowed": False, "reason": "AMBIGUOUS_POST_BLOCK", "fingerprint": fp}
             else:
@@ -2325,6 +2332,44 @@ class StateStore:
         }
         self._write(state)
         return {"allowed": True, "reason": None, "fingerprint": fp, "preflight": pre}
+
+    def begin_submission(self, fingerprint: str) -> Dict[str, Any]:
+        """Persist one-shot POST intent before the external side effect."""
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        rec = state.get("simulations", {}).get(fingerprint)
+        if not rec:
+            return {"ok": False, "reason": "UNKNOWN_FINGERPRINT"}
+        if rec.get("status") != "RESERVED" or rec.get("simulation_id"):
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_BEGIN_NOT_ALLOWED",
+                "status": rec.get("status"),
+                "simulation_id": rec.get("simulation_id"),
+            }
+        candidate = state.get("candidates", {}).get(fingerprint)
+        if not candidate or candidate.get("status") != "RESERVED":
+            return {
+                "ok": False,
+                "reason": "CANDIDATE_NOT_RESERVED",
+                "candidate_status": None if not candidate else candidate.get("status"),
+            }
+        event = {"status": "SUBMITTING", "at": _now_iso()}
+        rec["status"] = "SUBMITTING"
+        rec["submission_started_at"] = event["at"]
+        rec.setdefault("history", []).append(event)
+        state["simulations"][fingerprint] = rec
+        candidate["status"] = "SUBMITTING"
+        state["candidates"][fingerprint] = candidate
+        self._write(state)
+        return {
+            "ok": True,
+            "fingerprint": fingerprint,
+            "status": "SUBMITTING",
+            "submission_started_at": event["at"],
+        }
 
     def record_transport(self, fingerprint: str, status: str, simulation_id: str | None = None) -> Dict[str, Any]:
         state = self.read()
@@ -2369,11 +2414,13 @@ class StateStore:
         rec = state["simulations"].get(fingerprint)
         if not rec:
             return {"ok": False, "reason": "UNKNOWN_FINGERPRINT"}
-        if rec.get("status") != "RESERVED" or rec.get("simulation_id"):
+        if rec.get("status") not in {"RESERVED", "SUBMITTING"} or rec.get("simulation_id"):
             return {"ok": False, "reason": "RELEASE_NOT_ALLOWED", "status": rec.get("status")}
+        previous_status = rec.get("status")
         rec["status"] = "RELEASED"
-        rec.setdefault("release_history", []).append({"reason": reason, "at": _now_iso()})
-        rec.setdefault("history", []).append({"status": "RELEASED", "at": _now_iso()})
+        released_at = _now_iso()
+        rec.setdefault("release_history", []).append({"reason": reason, "at": released_at, "from": previous_status})
+        rec.setdefault("history", []).append({"status": "RELEASED", "at": released_at, "reason": reason, "from": previous_status})
         state["simulations"][fingerprint] = rec
         if fingerprint in state["candidates"]:
             state["candidates"][fingerprint]["status"] = "RELEASED"
@@ -2438,6 +2485,64 @@ class StateStore:
             "status": "INCONCLUSIVE",
             "evidence_ref": evidence_ref,
             "fingerprint": fingerprint,
+        }
+
+    def fail_posted_hypothesis(self, hypothesis_id: str, evidence_ref: str, reason: str) -> Dict[str, Any]:
+        """Close a POSTED simulation that terminated without usable Alpha result evidence."""
+        if not hypothesis_id.strip() or not evidence_ref.strip() or not reason.strip():
+            return {"ok": False, "reason": "POSTED_FAILURE_CONTRACT_REQUIRED"}
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+        focus = state.get("focus")
+        if not focus or focus.get("status") != "OPEN":
+            return {"ok": False, "reason": "NO_OPEN_FOCUS"}
+        hypothesis = state.get("hypotheses", {}).get(hypothesis_id)
+        if not hypothesis:
+            return {"ok": False, "reason": "UNKNOWN_HYPOTHESIS"}
+        if hypothesis.get("status") != "OPEN":
+            return {"ok": False, "reason": "HYPOTHESIS_NOT_OPEN", "status": hypothesis.get("status")}
+        if hypothesis.get("focus_revision") != focus.get("revision"):
+            return {"ok": False, "reason": "HYPOTHESIS_NOT_IN_CURRENT_FOCUS"}
+
+        evidence = state.get("evidence", {}).get(evidence_ref)
+        if not evidence:
+            return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF"}
+        if evidence.get("kind") != "SIMULATION_FAILURE" or evidence.get("subject") != hypothesis_id:
+            return {"ok": False, "reason": "SIMULATION_FAILURE_EVIDENCE_MISMATCH"}
+
+        fingerprint = hypothesis.get("candidate_fingerprint")
+        if not fingerprint:
+            return {"ok": False, "reason": "CANDIDATE_FINGERPRINT_REQUIRED"}
+        simulation = state.get("simulations", {}).get(fingerprint)
+        if not simulation or simulation.get("status") != "POSTED" or not simulation.get("simulation_id"):
+            return {
+                "ok": False,
+                "reason": "POSTED_SIMULATION_REQUIRED",
+                "status": None if not simulation else simulation.get("status"),
+            }
+
+        hypothesis["status"] = "INCONCLUSIVE"
+        hypothesis["result"] = {
+            "disposition": "POSTED_SIMULATION_FAILURE",
+            "reason": reason.strip(),
+            "evidence_ref": evidence_ref,
+            "simulation_id": simulation.get("simulation_id"),
+        }
+        state["hypotheses"][hypothesis_id] = hypothesis
+        if fingerprint in state.get("candidates", {}):
+            state["candidates"][fingerprint]["status"] = "INCONCLUSIVE"
+            state["candidates"][fingerprint]["disposition"] = "INCONCLUSIVE"
+            state["candidates"][fingerprint]["disposition_reason"] = reason.strip()
+        self._write(state)
+        return {
+            "ok": True,
+            "hypothesis_id": hypothesis_id,
+            "status": "INCONCLUSIVE",
+            "evidence_ref": evidence_ref,
+            "fingerprint": fingerprint,
+            "simulation_id": simulation.get("simulation_id"),
         }
 
     def evaluate_result(self, candidate: Dict[str, Any], result_evidence: Dict[str, Any]) -> Dict[str, Any]:
@@ -2686,8 +2791,10 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("allow-field"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--field", required=True); p.add_argument("--evidence-ref", required=True)
     p = sub.add_parser("preflight"); p.add_argument("--candidate"); p.add_argument("--state"); p.add_argument("--root-alpha-id")
     p = sub.add_parser("reserve"); p.add_argument("--candidate"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("begin-submission"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True)
     p = sub.add_parser("record"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--status", required=True); p.add_argument("--simulation-id")
     p = sub.add_parser("release"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("fail-posted-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("evaluate"); p.add_argument("--candidate", required=True); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("promote"); p.add_argument("--candidate", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
 
@@ -2715,8 +2822,10 @@ def _main(argv: Iterable[str] | None = None) -> int:
             cand = _load_json_arg(args.candidate)
             out = preflight_candidate(cand, StateStore(args.state, args.root_alpha_id).read(), require_open_hypothesis=True) if args.state and args.root_alpha_id else preflight_candidate(cand)
         elif args.cmd == "reserve": out = StateStore(args.state, args.root_alpha_id).reserve_simulation(_load_json_arg(args.candidate))
+        elif args.cmd == "begin-submission": out = StateStore(args.state, args.root_alpha_id).begin_submission(args.fingerprint)
         elif args.cmd == "record": out = StateStore(args.state, args.root_alpha_id).record_transport(args.fingerprint, args.status, args.simulation_id)
         elif args.cmd == "release": out = StateStore(args.state, args.root_alpha_id).release_reservation(args.fingerprint, args.reason)
+        elif args.cmd == "fail-posted-hypothesis": out = StateStore(args.state, args.root_alpha_id).fail_posted_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
         elif args.cmd == "evaluate": out = StateStore(args.state, args.root_alpha_id).evaluate_result(_load_json_arg(args.candidate), _load_json_arg(args.result))
         else: out = StateStore(args.state, args.root_alpha_id).promote(_load_json_arg(args.candidate))
     except (ValueError, KeyError, json.JSONDecodeError) as exc:

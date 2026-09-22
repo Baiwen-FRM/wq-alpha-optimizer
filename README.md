@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.6.1
+# wq-alpha-optimizer v3.6.2
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -117,3 +117,16 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 ## v3.6.1 pre-transport hypothesis recovery
 
 A deterministic candidate preflight failure no longer strands an OPEN hypothesis before any reservation exists. The new `withdraw-hypothesis` transition records the pre-reservation hypothesis as `WITHDRAWN`, keeps the active route/focus open, and allows a corrected contract to be frozen under a new hypothesis ID. The transition is blocked as soon as a candidate fingerprint/reservation exists, including after a reservation is released.
+
+
+## v3.6.2 reserved-candidate executor
+
+- adds one Skill-owned executor for the mechanical path from a Guard-reserved candidate to BRAIN Result;
+- writes a `SUBMITTING` crash-safety fence before the one-shot WQ Lab submission call;
+- records confirmed 201 Location as `POSTED` immediately, then resumes only by Location, preventing automatic duplicate POST after poll/result interruptions;
+- `SUBMITTING` or `AMBIGUOUS_POST` never reposts automatically; an externally reconciled Location can be attached explicitly;
+- current Result + dedicated submission checks are fetched after completion and passed to Guard `evaluate_result`;
+- only machine-`SUPPORTED` results are automatically promoted; REFUTED/INCONCLUSIVE remain unpromoted;
+- explicit pre-POST rejection and terminal posted-simulation failure become auditable INCONCLUSIVE states rather than fake performance Results;
+- candidate payload, submission response, simulation outcome and result evidence are persisted under the run's canonical `logs/.data/.../candidates/` directory;
+- WQ Lab is unchanged; the executor uses its existing immediate submission compatibility helper and Location-resume simulation path.
