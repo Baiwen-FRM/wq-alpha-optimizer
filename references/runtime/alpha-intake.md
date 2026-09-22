@@ -10,20 +10,18 @@
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-该脚本负责固定顺序完成：
+**任何分析/评判开始前，四类信息都必须取得：**
 
-1. 本地 WQ Lab capability preflight（不访问 BRAIN）；
-2. 创建本次 canonical run MD/state；
-3. 通过本地 WQ Lab 取得 Root details / checks / exact used-field metadata；
-4. 检查现有 recordsets；必要时只创建一个 same-expression / same-settings / `visualization=true` diagnostic control；
-5. 有界发现并读取 raw recordsets；
-6. 把完整 intake 保存到本次 `logs/.data/<run_id>/`；
-7. 用 baseline projection 初始化 Guard；
-8. 用 dashboard projection 更新同一个 canonical MD 首页。
+1. **Expression + Settings**：当前 Alpha expression、instrument/region/universe/delay/decay/neutralization/truncation 等 locked settings；
+2. **Result + Checks**：current Sharpe/Fitness/Returns/Margin/Turnover 等 Result，以及专用 submission-check endpoint 的 current checks；
+3. **Data Field / Dataset**：从 expression 解析实际使用 fields，并对这些 fields 做 exact detail lookup，记录 description/type/dataset/coverage/dateCoverage；
+4. **Visualization**：先检查现有 rich recordsets；若不足，创建一个 same-expression / same-settings、仅 `visualization=true` 的 diagnostic simulation。对 diagnostic Alpha 的 recordset listing 做有界稳定性确认，然后读取**平台当前列出的全部 available recordsets**。不要把“19”硬编码成协议；某次平台列出 19 个，就必须尝试读取这 19 个，未来列出 17/21 个也按实际列表全取。
 
-Controller **不得**在正常路径上手工重排这些步骤，也不得把它拆回 `start-run → provider intake → init → update-dashboard` 四段自由编排。低层命令只用于调试/恢复。
+Bootstrap 固定完成 run MD/state 创建、上述四类事实取得、raw intake 持久化、Guard baseline 初始化与 Dashboard 更新。Controller 不得把这些步骤拆开自由重排。
 
-Bootstrap 返回 `READY_FOR_DIAGNOSIS` 后才进入 Stage A/B。若本地 WQ Lab capability preflight 失败，不创建 run；若认证/BRAIN intake 在 run 创建后失败，记录 BOOTSTRAP failure 并停止，不静默改用 CNHKMCP。
+若单个 recordset 在有界 retry 后仍不可读，保留其 listing 与 incomplete/unavailable 状态并继续使用其余事实；不要误判为“没有 visualization”。只有 WQ Lab capability/auth/BRAIN 整体不可继续时 bootstrap 才失败。
+
+**Bootstrap 不是用户请求的完成点。** 返回 `READY_FOR_DIAGNOSIS` 后，必须在同一次 optimize 执行继续 Stage A → B → C；若 plan 有 ACTIVE route，再立即继续 Stage D → E → F。不得以“已完成 intake/Profile/Plan，下一步将继续”为最终答复。
 
 ## Stage A — ROOT
 
@@ -38,7 +36,7 @@ Root Baseline immutable；Incumbent 初始等于 Root。`PENDING` 是未知，�
 
 初始化 guard 时尽量把 Root 的 current Result/check snapshot 一并写入 `result_evidence`，这样后续 protected metric / new blocker 比较可以 machine-check。
 
-Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的可读投影，固定包含：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。字段 description/type/dataset/coverage/dateCoverage 可取得时补齐；没有 visualization 时明确写 unavailable/pending，不猜。
+四类 Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的固定可读投影：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。如果 visualization 或某个 recordset 经有界恢复仍不可得，明确写 incomplete/unavailable，不猜，也不因此跳过后续分析。
 
 ## Stage B — DIAGNOSE
 
@@ -50,7 +48,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 区分平台事实、结构推断、未证实假设。字段名不能代替字段语义；field description 应参与 expression node → idea role 的解释，但 description 本身不证明 PIT、lag、update cadence、unit 或 missing semantics。
 
-只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Dashboard intake 会固定尝试取得 visualization recordsets；这些 recordsets 是信息面，不会因为“已经画出来”就自动成为 candidate evidence。只有能区分机制的部分才注册为 routing evidence。
+先基于 mandatory intake 的四类信息进行完整判断：expression/settings 给结构与约束，Result/checks 给目标，field metadata 给数据语义，visualization/recordsets 给时间稳定性、coverage、size/sector/industry exposure 等横截面信息。recordsets 是基础信息面；只有其中能实际支持某个机制判断的内容才注册为 routing evidence。若这四类信息之外仍存在一个能实质区分机制的 in-scope diagnostic，再增加 targeted deep diagnostic，而不是重新做一遍普遍 intake。
 
 **Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
 
@@ -74,6 +72,7 @@ expression node → operator/transformation → field → dataset → idea role
 - 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
 - Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
 - 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 仍为空才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
+- **Plan 写入后立即执行。** `set-plan` 若返回 `must_continue=true` / `next_required_action=SET_FOCUS`，controller 必须立即进入 Stage D；正常 optimize 请求不得在这里结束或向用户报告“下一步再继续”。
 
 ## Stage D — FOCUS
 
