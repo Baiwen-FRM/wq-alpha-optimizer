@@ -510,8 +510,9 @@ def _catalog_entry_for_blocker(blocker: str) -> Dict[str, Any]:
     name = str(blocker)
     aliases = {
         "HTVR": "HIGH_TURNOVER",
-        "LOW_RETURNS": "LOW_FITNESS",
-        "LOW_ROBUST_UNIVERSE_RETURNS": "LOW_ROBUST_UNIVERSE_RETURNS",
+        "LOW_AFTER_COST_ILLIQUID_UNIVERSE_SHARPE": "INVESTABILITY",
+        "LOW_INVESTABILITY_CONSTRAINED_SHARPE": "INVESTABILITY",
+        "LIQUIDITY_UNIVERSE": "INVESTABILITY",
     }
     key = aliases.get(name, name)
     entry = blockers.get(key)
