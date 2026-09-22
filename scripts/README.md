@@ -50,6 +50,8 @@ python3 scripts/execute_reserved_candidate.py --state <STATE_PATH> --root-alpha-
 
 It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check evidence → evaluate → promote-if-SUPPORTED`. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. Re-running a POSTED candidate resumes by Location; it never sends a second POST. `SUBMITTING/AMBIGUOUS_POST` requires reconciliation rather than blind retry.
 
+Outputs with `resumable=true` are expected safe continuation states. The optimizer controller should call the same command again within the same run; the CLI exits successfully for these states. Do not re-bootstrap or manufacture a new candidate while a resumable fingerprint is active.
+
 ## Deterministic bootstrap
 
 Normal Root intake is a single command:
