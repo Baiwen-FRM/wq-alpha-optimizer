@@ -95,6 +95,11 @@ def _render_run_log(state: Dict[str, Any]) -> str:
 HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE", "WITHDRAWN"}
 FOCUS_TYPES = {"DEFECT", "ENHANCEMENT"}
 TRANSPORT_TRANSITIONS = {
+    # RESERVED direct transitions remain for compatibility with controllers that
+    # perform the external POST themselves. The Skill-owned executor uses the
+    # stricter RESERVED -> SUBMITTING -> ... path so a crash cannot trigger an
+    # automatic duplicate POST.
+    "RESERVED": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
     "SUBMITTING": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
     "AMBIGUOUS_POST": {"POSTED"},  # recovery discovers the original simulation; never repost
 }
