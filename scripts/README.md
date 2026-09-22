@@ -29,3 +29,22 @@ Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经
 
 
 State mutation is single-writer. Concurrent/stale state snapshots are rejected with `STATE_WRITE_CONFLICT`; re-read the state and retry serially. This prevents evidence loss from overlapping Guard commands.
+
+
+## WQ Lab provider
+
+`wq_lab_provider.py` is a thin Skill-side bridge to the user's local `wq_lib`. It does not contain BRAIN HTTP implementations and does not vendor WQ Lab.
+
+Normal Root intake:
+
+```text
+python3 scripts/wq_lab_provider.py intake \
+  --alpha-id <ID> \
+  --output <raw-intake.json> \
+  --baseline-output <baseline.json> \
+  --dashboard-output <dashboard.json>
+```
+
+Then initialize/update the Guard using the emitted projections. `recordset_dashboard.py` deterministically maps raw BRAIN recordsets to chart specs; `run_dashboard.py` renders those specs. Rendering/MD code remains in this Skill, never in WQ Lab.
+
+The local WQ Lab must expose the three additive generic reads listed in `../references/runtime/wq-lab-provider.md`. No silent CNHKMCP fallback is used.

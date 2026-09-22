@@ -1,4 +1,4 @@
-# wq-alpha-optimizer v3.4.0
+# wq-alpha-optimizer v3.5.0
 
 Constrained optimizer for an **existing WorldQuant BRAIN Alpha**. It is an evidence-driven repair/enhancement pipeline, not a metric-search engine.
 
@@ -60,3 +60,14 @@ An empty Profile/Plan is a valid result when no justified route exists; the cont
 - after promotion the plan becomes stale and the optimizer re-diagnoses from the improved Incumbent, enabling bounded stepwise progress without dense parameter scans;
 - every canonical run MD now opens with a live Dashboard: expression/settings, Result/checks, field metadata, visualization/recordsets, optional SVG charts, and candidate progression;
 - dashboard charts are generated with the Python standard library only and remain local under ignored run-log assets.
+
+
+## v3.5.0 local WQ Lab provider
+
+- authenticated BRAIN I/O now uses the user's local WQ Lab/`wq_lib` as the normal provider instead of agent-selected CNHKMCP calls;
+- WQ Lab remains narrowly scoped to BRAIN communication; the optimizer does not vendor or restructure it;
+- the optimizer requires only three additive WQ Lab primitives: exact `get_datafield`, generic recordset discovery, and generic recordset retrieval;
+- `wq_lab_provider.py intake` fixes Root data acquisition order and emits separate raw-evidence, Guard-baseline, and Dashboard projections;
+- visualization control stays in the Skill: same expression/settings with only `visualization=true`, followed by bounded recordset discovery;
+- recordset-to-chart behavior is code-defined in `recordset_dashboard.py`; the model no longer chooses chart type or ordering;
+- normal execution has no silent CNHKMCP fallback, preventing backend choice from changing run behavior or UI.

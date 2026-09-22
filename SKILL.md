@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.4.0
+  version: 3.5.0
 ---
 
 # WQ Alpha Optimizer
@@ -32,6 +32,6 @@ metadata:
 
 正式路由入口是 `references/index.md`：planning 可以识别多个 evidence-supported route/owner，但执行时只加载当前 active route 的一个 Primary owner；不要预加载全部 optimization references。
 
-Visualization 是 conditional diagnostic enrichment，不是固定 gate；其触发和执行位置由 `references/runtime/alpha-intake.md` 决定。
+Dashboard 所需的 Root facts 与 visualization snapshot 走固定 WQ Lab intake；visualization control 的研究含义和候选使用仍由 `references/runtime/alpha-intake.md` 决定。
 
-真实 FE 查询、checks 和 simulation 使用已认证的 CNHKMCP。Python Alpha 的转换、实现和 Python 专属回测由 `wq-python-alpha` 负责。
+真实 FE 查询、checks、field metadata、recordsets、correlation 和 simulation 使用本地已认证的 WQ Lab/`wq_lib`，接口边界见 `references/runtime/wq-lab-provider.md`。正常路径不再静默切回 CNHKMCP。Python Alpha 的转换、实现和 Python 专属回测由 `wq-python-alpha` 负责。
