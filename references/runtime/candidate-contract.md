@@ -256,6 +256,8 @@ POSTED --Location resume only--> result / resumable polling
 
 WQ Lab 已有 `_start_simulation` 只负责一次受控 submission 并立即返回 HTTP response/Location；Skill 不复制 BRAIN HTTP。201+Location 一旦返回，Guard 立即持久化 Location，然后后续全部通过 WQ Lab `simulate_single(..., location=...)` 续跑，因此 poll 异常、result/check 暂时不完整、controller 重启都不会重新提交。
 
+Executor 返回 `resumable=true` 表示 transport/result 仍可安全续跑，而不是 candidate 失败。正常 optimize invocation 应继续调用同一 executor，直到得到 evaluated Result、promotion、明确 terminal simulation failure，或进入需要 reconciliation 的 `SUBMITTING/AMBIGUOUS_POST`。CLI 对 resumable state 返回成功退出码，避免上层把安全等待误判成 workflow crash。
+
 旧 controller 直接在 RESERVED 后记录 `POSTED/HTTP_429/AMBIGUOUS_POST` 的 bookkeeping transition 为兼容保留，但正常 Skill execution 不使用该捷径。
 
 显式 pre-POST 4xx 且没有 Location 时可以 release，并用 `TRANSPORT_FAILURE` evidence 把 hypothesis 记为 pre-POST `INCONCLUSIVE`。POST 已确认后若 simulation terminal error/cancelled 且没有可用 Alpha result，则使用 `SIMULATION_FAILURE` evidence 记为 `POSTED_SIMULATION_FAILURE / INCONCLUSIVE`；不能伪造 performance Result。
