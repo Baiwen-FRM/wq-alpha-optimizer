@@ -123,41 +123,43 @@ class CoreGuardTests(TestCase):
 
     def _no_action_plan(self, store=None, *, evidence_id="E_NO_ACTION"):
         store = store or self.store
-        state = store.read()
-        if evidence_id not in state["evidence"]:
-            self._register(
-                store,
-                evidence_id,
-                "DIAGNOSTIC_EXCLUSION",
-                "NO_ACTION",
-                "BRAIN:test_diagnostic",
-                "Current diagnostic evidence excludes the remaining in-scope mechanism families for this test.",
-                observed_at=guard._now_iso(),
-            )
-            state = store.read()
-        blockers = guard._current_blockers(state)
         rows = []
-        for blocker in blockers:
+        for blocker in guard._current_blockers(store.read()):
             entry = guard._catalog_entry_for_blocker(blocker)
+            mechanisms = []
+            observation_refs = []
+            for index, item in enumerate(entry["mechanisms"], start=1):
+                ref = f"{evidence_id}_{blocker}_{index}"
+                if ref not in store.read()["evidence"]:
+                    self._register(
+                        store,
+                        ref,
+                        "DIAGNOSTIC_EXCLUSION",
+                        item["id"],
+                        "BRAIN:test_diagnostic",
+                        f"Current targeted diagnostic excludes mechanism {item['id']} for this test.",
+                        observed_at=guard._now_iso(),
+                    )
+                observation_refs.append(ref)
+                mechanisms.append(
+                    {
+                        "id": f"X_{blocker}_{index}",
+                        "mechanism": item["id"],
+                        "method_family": item["method_family"],
+                        "status": "EXCLUDED",
+                        "evidence_refs": [ref],
+                        "reasoning": "Current targeted diagnostic excludes this mechanism for the test state.",
+                        "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                        "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                    }
+                )
             rows.append(
                 {
                     "name": blocker,
                     "target": entry["target"],
                     "owner": entry["owner"],
-                    "observation_refs": [evidence_id],
-                    "mechanisms": [
-                        {
-                            "id": f"X_{blocker}_{index}",
-                            "mechanism": item["id"],
-                            "method_family": item["method_family"],
-                            "status": "EXCLUDED",
-                            "evidence_refs": [evidence_id],
-                            "reasoning": "Current diagnostic evidence excludes this mechanism for the test state.",
-                            "next_question": "No in-scope falsifiable question remains for this mechanism.",
-                            "exclusion_basis": "CURRENT_DIAGNOSTIC",
-                        }
-                        for index, item in enumerate(entry["mechanisms"], start=1)
-                    ],
+                    "observation_refs": observation_refs,
+                    "mechanisms": mechanisms,
                 }
             )
         return {
