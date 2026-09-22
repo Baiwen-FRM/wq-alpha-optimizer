@@ -590,10 +590,10 @@ def _normalize_synthesis(
         if not isinstance(raw_assessments, list) or not raw_assessments:
             raise ValueError(f"synthesis blocker {name} needs mechanisms")
 
-        allowed_pairs = {
-            (str(item.get("id")), str(item.get("method_family")))
+        allowed_method_families = {
+            str(item.get("method_family"))
             for item in entry.get("mechanisms", [])
-            if isinstance(item, dict) and item.get("id") and item.get("method_family")
+            if isinstance(item, dict) and item.get("method_family")
         }
         assessments: list[Dict[str, Any]] = []
         for item in raw_assessments:
@@ -609,10 +609,9 @@ def _normalize_synthesis(
             seen_assessment_ids.add(aid)
             mechanism = str(item["mechanism"]).strip()
             method_family = str(item["method_family"]).strip()
-            if allowed_pairs and (mechanism, method_family) not in allowed_pairs:
+            if allowed_method_families and method_family not in allowed_method_families:
                 raise ValueError(
-                    f"mechanism/method_family not in current owner catalog for {name}: "
-                    f"{mechanism}/{method_family}"
+                    f"method_family not in current owner catalog for {name}: {method_family}"
                 )
             status = str(item["status"]).upper()
             if status not in SYNTHESIS_STATUSES:
