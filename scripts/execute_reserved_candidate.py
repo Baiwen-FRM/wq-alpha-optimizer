@@ -46,6 +46,11 @@ def _active_fingerprints(state: dict[str, Any]) -> list[str]:
             continue
         if candidate.get("result_evaluation") is not None or candidate.get("status") == "PROMOTED":
             continue
+        spec = candidate.get("spec") if isinstance(candidate.get("spec"), dict) else {}
+        hypothesis_id = str(spec.get("hypothesis_id") or "")
+        hypothesis = (state.get("hypotheses") or {}).get(hypothesis_id)
+        if not isinstance(hypothesis, dict) or hypothesis.get("status") != "OPEN":
+            continue
         simulation = (state.get("simulations") or {}).get(fp)
         if not isinstance(simulation, dict):
             continue
@@ -180,6 +185,41 @@ def _existing_result_or_promotion(
     }
 
 
+def _required_contract_observations_missing(
+    store: guard.StateStore,
+    candidate: dict[str, Any],
+    evidence: dict[str, Any],
+) -> list[str]:
+    state = store.read()
+    hypothesis = (state.get("hypotheses") or {}).get(str(candidate.get("hypothesis_id") or "")) or {}
+    contract = hypothesis.get("contract") if isinstance(hypothesis.get("contract"), dict) else {}
+    metric_names = {str(name).upper() for name in (evidence.get("metrics") or {})}
+    check_names = {
+        str(row.get("name"))
+        for row in (evidence.get("checks") or [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    missing: list[str] = []
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict):
+            continue
+        if criterion.get("type") == "metric":
+            name = str(criterion.get("name") or "").upper()
+            if name and name not in metric_names:
+                missing.append(f"metric:{name}")
+        elif criterion.get("type") == "check":
+            name = str(criterion.get("name") or "")
+            if name and name not in check_names:
+                missing.append(f"check:{name}")
+    for policy in contract.get("protected_metrics", []):
+        if not isinstance(policy, dict):
+            continue
+        name = str(policy.get("name") or "").upper()
+        if name and name not in metric_names:
+            missing.append(f"protected_metric:{name}")
+    return sorted(set(missing))
+
+
 def _evaluate_done_alpha(
     store: guard.StateStore,
     wq: Any,
@@ -191,13 +231,17 @@ def _evaluate_done_alpha(
 ) -> dict[str, Any]:
     evidence = provider.result_evidence_snapshot(session, wq, alpha_id, simulation_id)
     _persist(store, fingerprint, "result_evidence.json", evidence)
-    if not evidence.get("response_complete"):
+    missing_contract_observations = _required_contract_observations_missing(
+        store, candidate, evidence
+    )
+    if not evidence.get("response_complete") or missing_contract_observations:
         return {
             "ok": False,
             "stage": "RESULT_EVIDENCE_PENDING",
             "fingerprint": fingerprint,
             "alpha_id": alpha_id,
             "simulation_id": simulation_id,
+            "missing_contract_observations": missing_contract_observations,
             "result_evidence": evidence,
             "resumable": True,
         }
@@ -438,6 +482,15 @@ def execute_reserved_candidate(
         return existing
 
     state = store.read()
+    hypothesis = (state.get("hypotheses") or {}).get(str(candidate.get("hypothesis_id") or "")) or {}
+    if hypothesis.get("status") in {"INCONCLUSIVE", "WITHDRAWN", "REFUTED"}:
+        return {
+            "ok": True,
+            "stage": "HYPOTHESIS_ALREADY_TERMINAL",
+            "fingerprint": fingerprint,
+            "hypothesis_status": hypothesis.get("status"),
+            "idempotent": True,
+        }
     transport = (state.get("simulations") or {}).get(fingerprint)
     if not isinstance(transport, dict):
         return {"ok": False, "stage": "SIMULATION_STATE_REQUIRED", "fingerprint": fingerprint}
@@ -502,7 +555,7 @@ def main() -> int:
     args = parser.parse_args()
 
     store = guard.StateStore(Path(args.state), args.root_alpha_id)
-    wq = provider._load_wq_lib()
+    wq = provider._load_wq_lib(require_submission_start=True)
     with contextlib.redirect_stdout(io.StringIO()):
         session = wq.login()
 
