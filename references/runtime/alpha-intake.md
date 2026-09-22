@@ -14,6 +14,8 @@ Guard 必须返回 `log_exists=true`、`log_path` 和 `state_path`。`log_path` 
 
 如果 canonical MD 无法创建，当前 optimizer run 不继续。
 
+随后按 `wq-lab-provider.md` 运行固定的 WQ Lab intake。不要让 controller 临场决定用 CNHKMCP 还是本地库，也不要手写 HTTP 复制已有 WQ Lab primitive。intake 同时产出 raw evidence、Guard baseline projection 和 Dashboard projection；三者职责不同。
+
 ## Stage A — ROOT
 
 读取并记录当前认证平台返回的：
@@ -39,7 +41,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 区分平台事实、结构推断、未证实假设。字段名不能代替字段语义；field description 应参与 expression node → idea role 的解释，但 description 本身不证明 PIT、lag、update cadence、unit 或 missing semantics。
 
-只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Visualization 同样按证据触发，不是固定 gate。
+只在能区分机制时增加 deep diagnostics：coverage/concentration、tail/sentinel/ties、stale/churn、gate activation、PnL/exposure/区域贡献等。Dashboard intake 会固定尝试取得 visualization recordsets；这些 recordsets 是信息面，不会因为“已经画出来”就自动成为 candidate evidence。只有能区分机制的部分才注册为 routing evidence。
 
 **Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
 
@@ -50,7 +52,7 @@ expression node → operator/transformation → field → dataset → idea role
 
 如果日志在 closeout 中写“继续需要某个当前 scope 内可取得的 diagnostic”，但本 run 并未尝试它，则不能把当前 run 归因于 `COMPLETED_WITH_EXHAUSTION`；先完成 diagnostic escalation。
 
-所有要驱动 machine decision 的诊断，先作为 evidence record 注册到 guard。取得 visualization/recordsets 后，同时用 `update-dashboard` 把诊断 Alpha、recordset 列表、关键摘要和可画的数值序列更新到 MD 首页；PnL/ordered time series 优先 line chart，cap/sector/industry 等 bucket 比较优先 bar chart。图形只展示平台返回数据，不补点、不编造。
+所有要驱动 machine decision 的诊断，先作为 evidence record 注册到 guard。Visualization raw recordsets 由 WQ Lab provider 获取，`recordset_dashboard.py` 按固定规则生成 chart specs，再用 `update-dashboard` 更新同一 MD 首页。模型不得临场选择 chart type、排序、axis 或标题。图形只展示平台返回数据，不补点、不插值、不编造。
 
 ## Stage C — PROFILE / OPTIMIZATION PLAN
 
