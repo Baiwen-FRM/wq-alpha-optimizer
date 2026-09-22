@@ -1736,7 +1736,9 @@ class StateStore:
         }
         if synthesis is not None:
             normalized["synthesis"] = synthesis
-        if state.get("planning_contract") not in {"v1", "legacy"}:
+        if state.get("planning_contract") == "legacy":
+            state["planning_contract"] = "v1"
+        elif state.get("planning_contract") != "v1":
             state["planning_contract"] = "v2"
         state["optimization_plan"] = normalized
         self._write(state)
