@@ -39,6 +39,11 @@ LOCKED_SCOPE_KEYS = {"region", "delay", "universe", "instrumenttype"}
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = SKILL_ROOT / "logs"
 STATE_DIR = LOGS_DIR / ".state"
+MECHANISM_CATALOG_PATH = SKILL_ROOT / "references" / "runtime" / "mechanism-catalog.json"
+
+SYNTHESIS_ACTIONABLE = {"ACTIONABLE", "PLAUSIBLE_PROBE"}
+SYNTHESIS_STATUSES = SYNTHESIS_ACTIONABLE | {"NEEDS_DIAGNOSTIC", "EXCLUDED"}
+SYNTHESIS_EXCLUSION_BASES = {"CURRENT_DIAGNOSTIC", "CURRENT_CANDIDATE_RESULT", "SCOPE_BOUNDARY"}
 
 
 def _safe_component(value: Any) -> str:
@@ -489,6 +494,224 @@ def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _load_mechanism_catalog() -> Dict[str, Any]:
+    try:
+        raw = json.loads(MECHANISM_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"mechanism catalog unavailable: {exc}") from exc
+    if not isinstance(raw, dict) or not isinstance(raw.get("blockers"), dict):
+        raise ValueError("mechanism catalog contract invalid")
+    return raw
+
+
+def _catalog_entry_for_blocker(blocker: str) -> Dict[str, Any]:
+    catalog = _load_mechanism_catalog()
+    blockers = catalog["blockers"]
+    name = str(blocker)
+    aliases = {
+        "HTVR": "HIGH_TURNOVER",
+        "LOW_RETURNS": "LOW_FITNESS",
+        "LOW_ROBUST_UNIVERSE_RETURNS": "LOW_ROBUST_UNIVERSE_RETURNS",
+    }
+    key = aliases.get(name, name)
+    entry = blockers.get(key)
+    if isinstance(entry, dict):
+        return entry
+    if name.startswith("LOW_GLB_") or name.startswith("LOW_ASI_"):
+        return {
+            "target": "REGIONAL_SHARPE",
+            "owner": "runtime/regional.md",
+            "mechanisms": [
+                {"id": "regional_data_or_exposure", "method_family": "regional_data_exposure_or_horizon_diagnosis"}
+            ],
+        }
+    fallback = catalog.get("fallback")
+    if not isinstance(fallback, dict):
+        raise ValueError("mechanism catalog fallback missing")
+    return fallback
+
+
+def _current_blockers(state: Dict[str, Any]) -> list[str]:
+    incumbent = state.get("incumbent") or {}
+    evidence = incumbent.get("result_evidence") or {}
+    try:
+        checks = _normalize_checks(evidence.get("checks"))
+    except ValueError:
+        return []
+    return sorted(_fail_blockers(checks))
+
+
+def _normalize_synthesis(
+    synthesis: Any,
+    state: Dict[str, Any],
+    based_on_evidence_revision: int,
+) -> Dict[str, Any]:
+    if not isinstance(synthesis, dict):
+        raise ValueError("plan synthesis must be an object")
+    raw_blockers = synthesis.get("blockers")
+    if not isinstance(raw_blockers, list):
+        raise ValueError("plan synthesis.blockers must be a list")
+
+    current_blockers = _current_blockers(state)
+    rows: list[Dict[str, Any]] = []
+    seen_blockers: set[str] = set()
+    seen_assessment_ids: set[str] = set()
+
+    for raw in raw_blockers:
+        if not isinstance(raw, dict) or not _nonempty(raw.get("name")):
+            raise ValueError("each synthesis blocker needs name")
+        name = str(raw["name"]).strip()
+        if name in seen_blockers:
+            raise ValueError(f"duplicate synthesis blocker: {name}")
+        seen_blockers.add(name)
+
+        entry = _catalog_entry_for_blocker(name)
+        expected_target = str(entry.get("target") or "").strip()
+        expected_owner = str(entry.get("owner") or "").strip()
+        target = str(raw.get("target") or expected_target).strip()
+        owner = str(raw.get("owner") or expected_owner).strip()
+        if expected_target and target != expected_target:
+            raise ValueError(f"synthesis blocker target mismatch for {name}: {target} != {expected_target}")
+        if expected_owner and owner != expected_owner:
+            raise ValueError(f"synthesis blocker owner mismatch for {name}: {owner} != {expected_owner}")
+
+        observations = raw.get("observation_refs", [])
+        if not isinstance(observations, list) or any(not isinstance(ref, str) or not ref.strip() for ref in observations):
+            raise ValueError("synthesis observation_refs must be a string list")
+        observations = sorted(dict.fromkeys(ref.strip() for ref in observations))
+        for ref in observations:
+            evidence = state.get("evidence", {}).get(ref)
+            if not isinstance(evidence, dict):
+                raise ValueError(f"unknown synthesis observation ref: {ref}")
+            if int(evidence.get("revision", 0)) > based_on_evidence_revision:
+                raise ValueError(f"synthesis observation newer than plan snapshot: {ref}")
+
+        raw_assessments = raw.get("mechanisms")
+        if not isinstance(raw_assessments, list) or not raw_assessments:
+            raise ValueError(f"synthesis blocker {name} needs mechanisms")
+
+        allowed_pairs = {
+            (str(item.get("id")), str(item.get("method_family")))
+            for item in entry.get("mechanisms", [])
+            if isinstance(item, dict) and item.get("id") and item.get("method_family")
+        }
+        assessments: list[Dict[str, Any]] = []
+        for item in raw_assessments:
+            if not isinstance(item, dict):
+                raise ValueError("mechanism assessment must be an object")
+            required = ("id", "mechanism", "method_family", "status", "reasoning", "next_question", "evidence_refs")
+            missing = [key for key in required if not _nonempty(item.get(key))]
+            if missing:
+                raise ValueError(f"mechanism assessment missing: {', '.join(missing)}")
+            aid = str(item["id"]).strip()
+            if aid in seen_assessment_ids:
+                raise ValueError(f"duplicate mechanism assessment id: {aid}")
+            seen_assessment_ids.add(aid)
+            mechanism = str(item["mechanism"]).strip()
+            method_family = str(item["method_family"]).strip()
+            if allowed_pairs and (mechanism, method_family) not in allowed_pairs:
+                raise ValueError(
+                    f"mechanism/method_family not in current owner catalog for {name}: "
+                    f"{mechanism}/{method_family}"
+                )
+            status = str(item["status"]).upper()
+            if status not in SYNTHESIS_STATUSES:
+                raise ValueError(f"invalid mechanism assessment status: {status}")
+            refs = item["evidence_refs"]
+            if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+                raise ValueError("mechanism assessment evidence_refs must be a non-empty string list")
+            refs = sorted(dict.fromkeys(ref.strip() for ref in refs))
+            for ref in refs:
+                evidence = state.get("evidence", {}).get(ref)
+                if not isinstance(evidence, dict):
+                    raise ValueError(f"unknown mechanism evidence ref: {ref}")
+                if int(evidence.get("revision", 0)) > based_on_evidence_revision:
+                    raise ValueError(f"mechanism evidence newer than plan snapshot: {ref}")
+            normalized_item = {
+                "id": aid,
+                "mechanism": mechanism,
+                "method_family": method_family,
+                "status": status,
+                "evidence_refs": refs,
+                "reasoning": str(item["reasoning"]).strip(),
+                "next_question": str(item["next_question"]).strip(),
+            }
+            if status == "EXCLUDED":
+                basis = str(item.get("exclusion_basis") or "").upper()
+                if basis not in SYNTHESIS_EXCLUSION_BASES:
+                    raise ValueError(
+                        "EXCLUDED mechanism requires exclusion_basis="
+                        "CURRENT_DIAGNOSTIC/CURRENT_CANDIDATE_RESULT/SCOPE_BOUNDARY"
+                    )
+                normalized_item["exclusion_basis"] = basis
+            assessments.append(normalized_item)
+
+        rows.append({
+            "name": name,
+            "target": target,
+            "owner": owner,
+            "observation_refs": observations,
+            "mechanisms": assessments,
+        })
+
+    if current_blockers:
+        missing = sorted(set(current_blockers) - seen_blockers)
+        extra = sorted(seen_blockers - set(current_blockers))
+        if missing:
+            raise ValueError("synthesis missing current blockers: " + ", ".join(missing))
+        if extra:
+            raise ValueError("synthesis contains non-current blockers: " + ", ".join(extra))
+
+    return {
+        "incumbent_alpha_id": str((state.get("incumbent") or {}).get("alpha_id") or ""),
+        "based_on_evidence_revision": based_on_evidence_revision,
+        "blockers": rows,
+    }
+
+
+def _synthesis_assessment_map(synthesis: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for blocker in synthesis.get("blockers", []):
+        for assessment in blocker.get("mechanisms", []):
+            row = dict(assessment)
+            row["blocker"] = blocker.get("name")
+            row["target"] = blocker.get("target")
+            row["owner"] = blocker.get("owner")
+            out[str(assessment.get("id"))] = row
+    return out
+
+
+def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any] | None:
+    actionable = []
+    diagnostic = []
+    for blocker in synthesis.get("blockers", []):
+        for assessment in blocker.get("mechanisms", []):
+            status = assessment.get("status")
+            row = {
+                "assessment_id": assessment.get("id"),
+                "blocker": blocker.get("name"),
+                "mechanism": assessment.get("mechanism"),
+                "method_family": assessment.get("method_family"),
+            }
+            if status in SYNTHESIS_ACTIONABLE:
+                actionable.append(row)
+            elif status == "NEEDS_DIAGNOSTIC":
+                diagnostic.append(row)
+    if actionable:
+        return {
+            "ok": False,
+            "reason": "EMPTY_PLAN_HAS_TESTABLE_MECHANISM",
+            "assessments": actionable,
+        }
+    if diagnostic:
+        return {
+            "ok": False,
+            "reason": "EMPTY_PLAN_DIAGNOSTIC_REQUIRED",
+            "assessments": diagnostic,
+        }
+    return None
+
+
 def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     if state.get("planning_contract") != "v1":
         return None
@@ -647,6 +870,11 @@ def _normalize_plan_route(route: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
             raise ValueError("new_observation_refs must be a string list")
         normalized["new_observation_refs"] = sorted(dict.fromkeys(ref.strip() for ref in refs))
+    if route.get("assessment_refs") is not None:
+        refs = route["assessment_refs"]
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+            raise ValueError("assessment_refs must be a non-empty string list")
+        normalized["assessment_refs"] = sorted(dict.fromkeys(ref.strip() for ref in refs))
     return normalized
 
 
@@ -963,7 +1191,7 @@ class StateStore:
             "schema_version": SCHEMA_VERSION,
             "_state_revision": 0,
             "root_alpha_id": self.root_alpha_id,
-            "planning_contract": "v1",
+            "planning_contract": "v2",
             "root_baseline": None,
             "incumbent": None,
             "evidence_revision": 0,
@@ -987,7 +1215,7 @@ class StateStore:
         state = json.loads(self.path.read_text(encoding="utf-8"))
         state.setdefault("_state_revision", 0)
         if "planning_contract" not in state:
-            state["planning_contract"] = "legacy" if state.get("root_baseline") else "v1"
+            state["planning_contract"] = "legacy" if state.get("root_baseline") else "v2"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
         state.setdefault("dashboard_context", {"fields": [], "visualization": {}})
@@ -1356,6 +1584,17 @@ class StateStore:
         if based_on_evidence_revision < 0 or based_on_evidence_revision > int(state.get("evidence_revision", 0)):
             return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_UNKNOWN"}
 
+        synthesis = None
+        if state.get("planning_contract") == "v2" and _current_blockers(state):
+            try:
+                synthesis = _normalize_synthesis(plan.get("synthesis"), state, based_on_evidence_revision)
+            except ValueError as exc:
+                return {"ok": False, "reason": "SYNTHESIS_CONTRACT", "detail": str(exc)}
+            if not raw_routes:
+                synthesis_rejection = _empty_plan_synthesis_rejection(synthesis)
+                if synthesis_rejection:
+                    return synthesis_rejection
+
         routes = []
         ids = set()
         keys = set()
@@ -1382,6 +1621,51 @@ class StateStore:
                 if int(state["evidence"][ref].get("revision", 0)) > based_on_evidence_revision:
                     return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_MISMATCH", "route_id": route["id"], "evidence_ref": ref}
             routes.append(route)
+
+        if synthesis is not None and routes:
+            assessment_map = _synthesis_assessment_map(synthesis)
+            for route in routes:
+                refs = route.get("assessment_refs")
+                if not refs:
+                    return {"ok": False, "reason": "ROUTE_ASSESSMENT_REFS_REQUIRED", "route_id": route.get("id")}
+                matched = []
+                for ref in refs:
+                    assessment = assessment_map.get(ref)
+                    if not assessment:
+                        return {
+                            "ok": False,
+                            "reason": "UNKNOWN_ROUTE_ASSESSMENT_REF",
+                            "route_id": route.get("id"),
+                            "assessment_ref": ref,
+                        }
+                    if assessment.get("status") not in SYNTHESIS_ACTIONABLE:
+                        return {
+                            "ok": False,
+                            "reason": "ROUTE_ASSESSMENT_NOT_TESTABLE",
+                            "route_id": route.get("id"),
+                            "assessment_ref": ref,
+                            "status": assessment.get("status"),
+                        }
+                    if (
+                        str(assessment.get("target")) != str(route.get("target"))
+                        or str(assessment.get("owner")) != str(route.get("owner"))
+                        or str(assessment.get("mechanism")) != str(route.get("mechanism"))
+                    ):
+                        return {
+                            "ok": False,
+                            "reason": "ROUTE_ASSESSMENT_MISMATCH",
+                            "route_id": route.get("id"),
+                            "assessment_ref": ref,
+                        }
+                    if not set(assessment.get("evidence_refs", [])).issubset(set(route.get("evidence_refs", []))):
+                        return {
+                            "ok": False,
+                            "reason": "ROUTE_DROPS_ASSESSMENT_EVIDENCE",
+                            "route_id": route.get("id"),
+                            "assessment_ref": ref,
+                        }
+                    matched.append(ref)
+                route["assessment_refs"] = sorted(dict.fromkeys(matched))
 
         active = [route for route in routes if route["status"] == "ACTIVE"]
         if len(active) > 1:
@@ -1436,7 +1720,10 @@ class StateStore:
             "routes": routes,
             "incumbent_alpha_id": incumbent_id,
         }
-        state["planning_contract"] = "v1"
+        if synthesis is not None:
+            normalized["synthesis"] = synthesis
+        if state.get("planning_contract") not in {"v1", "legacy"}:
+            state["planning_contract"] = "v2"
         state["optimization_plan"] = normalized
         self._write(state)
         if routes:
