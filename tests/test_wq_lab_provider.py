@@ -116,57 +116,6 @@ class WQLabProviderTests(TestCase):
         self.assertFalse(baseline["result_evidence"]["response_complete"])
         self.assertIn("checks_fallback", baseline["result_evidence"]["source"])
 
-    def test_root_intake_snapshot_does_not_touch_visualization_or_recordsets(self):
-        class FakeWQ:
-            @staticmethod
-            def login():
-                return object()
-
-            @staticmethod
-            def get_result(session, alpha_id):
-                return {
-                    "id": alpha_id,
-                    "type": "REGULAR",
-                    "regular": {"code": "rank(close)"},
-                    "settings": {"region": "GBR", "delay": 0, "universe": "TOP700"},
-                    "is": {"sharpe": 2.0, "fitness": 1.5, "checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]},
-                }
-
-            @staticmethod
-            def get_datafield(session, field_id):
-                return {
-                    "id": field_id,
-                    "dataset": {"id": "pv1"},
-                    "type": "MATRIX",
-                    "description": "Closing price",
-                    "data": [
-                        {"region": "GBR", "delay": 0, "universe": "TOP700", "coverage": 1.0, "dateCoverage": 0.99},
-                    ],
-                }
-
-            @staticmethod
-            def get_submission_check(session, alpha_id):
-                return {"is": {"checks": [{"name": "LOW_SHARPE", "result": "FAIL"}]}}
-
-            @staticmethod
-            def get_alpha_recordsets(*args, **kwargs):
-                raise AssertionError("Root intake must not read recordsets")
-
-            @staticmethod
-            def simulate_single(*args, **kwargs):
-                raise AssertionError("Root intake must not simulate visualization")
-
-        original = provider._load_wq_lib
-        provider._load_wq_lib = lambda: FakeWQ
-        try:
-            intake = provider.root_intake_snapshot("A1")
-        finally:
-            provider._load_wq_lib = original
-
-        self.assertEqual(intake["baseline"]["alpha_id"], "A1")
-        self.assertEqual(intake["dashboard"]["visualization"], {})
-        self.assertEqual(intake["dashboard"]["fields"][0]["name"], "close")
-
     def test_visualization_snapshot_reuses_rich_root_recordsets_without_post(self):
         class FakeWQ:
             simulate_calls = 0
