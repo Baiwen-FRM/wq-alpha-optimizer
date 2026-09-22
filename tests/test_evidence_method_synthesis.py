@@ -824,6 +824,177 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(rejected["reason"], "SYNTHESIS_CONTRACT")
 
 
+    def test_every_catalog_blocker_can_form_a_lightweight_probe_route(self):
+        catalog = guard._load_mechanism_catalog()["blockers"]
+        for sequence, (blocker, entry) in enumerate(sorted(catalog.items()), start=1):
+            with self.subTest(blocker=blocker):
+                state_path = Path(self.tempdir.name) / f"matrix_probe_{sequence}.json"
+                store = guard.StateStore(state_path, f"ROOT_{sequence}")
+                initialized = store.initialize(
+                    {
+                        "alpha_id": f"ROOT_{sequence}",
+                        "expression": "rank(close)",
+                        "fields": ["close"],
+                        "settings": {
+                            "language": "FASTEXPR",
+                            "instrumentType": "EQUITY",
+                            "region": "GBR",
+                            "universe": "TOP700",
+                            "delay": 0,
+                            "decay": 0,
+                            "neutralization": "NONE",
+                            "truncation": 0.08,
+                        },
+                        "language": "FASTEXPR",
+                        "result_evidence": {
+                            "metrics": {"SHARPE": 1.0},
+                            "checks": [{"name": blocker, "status": "FAIL"}],
+                            "observed_at": "2026-09-22T00:00:00Z",
+                            "source": "BRAIN:matrix",
+                            "response_complete": True,
+                            "authenticated": True,
+                        },
+                    }
+                )
+                self.assertTrue(initialized["initialized"], initialized)
+
+                evidence_id = f"E_{sequence}"
+                registered = store.register_evidence(
+                    {
+                        "id": evidence_id,
+                        "kind": "DIAGNOSTIC",
+                        "subject": blocker,
+                        "source": "BRAIN:matrix",
+                        "observed_at": guard._now_iso(),
+                        "claim": f"Current {blocker} evidence leaves one canonical method family worth a bounded probe.",
+                    }
+                )
+                self.assertTrue(registered["ok"], registered)
+
+                method = entry["mechanisms"][0]
+                assessment_id = f"A_{sequence}"
+                plan = {
+                    "based_on_evidence_revision": store.read()["evidence_revision"],
+                    "synthesis": {
+                        "blockers": [
+                            {
+                                "name": blocker,
+                                "target": entry["target"],
+                                "owner": entry["owner"],
+                                "observation_refs": [evidence_id],
+                                "mechanisms": [
+                                    {
+                                        "id": assessment_id,
+                                        "mechanism": method["id"],
+                                        "method_family": method["method_family"],
+                                        "status": "PLAUSIBLE_PROBE",
+                                        "evidence_refs": [evidence_id],
+                                        "reasoning": "Limited current evidence plus the canonical method family supports one bounded discriminator.",
+                                        "next_question": "Does the minimal mechanism intervention move the blocker as predicted?",
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                    "routes": [
+                        {
+                            "id": f"R_{sequence}",
+                            "target": entry["target"],
+                            "owner": entry["owner"],
+                            "mechanism": method["id"],
+                            "evidence_refs": [evidence_id],
+                            "assessment_refs": [assessment_id],
+                            "rationale": "Execute one evidence-grounded probe without enumerating unrelated methods.",
+                        }
+                    ],
+                }
+                accepted = store.set_plan(plan)
+                self.assertTrue(accepted["ok"], accepted)
+                self.assertTrue(accepted["must_continue"])
+
+    def test_every_catalog_blocker_supports_only_mechanism_specific_full_no_action_proof(self):
+        catalog = guard._load_mechanism_catalog()["blockers"]
+        for sequence, (blocker, entry) in enumerate(sorted(catalog.items()), start=1):
+            with self.subTest(blocker=blocker):
+                state_path = Path(self.tempdir.name) / f"matrix_empty_{sequence}.json"
+                store = guard.StateStore(state_path, f"EMPTY_ROOT_{sequence}")
+                initialized = store.initialize(
+                    {
+                        "alpha_id": f"EMPTY_ROOT_{sequence}",
+                        "expression": "rank(close)",
+                        "fields": ["close"],
+                        "settings": {
+                            "language": "FASTEXPR",
+                            "instrumentType": "EQUITY",
+                            "region": "GBR",
+                            "universe": "TOP700",
+                            "delay": 0,
+                            "decay": 0,
+                            "neutralization": "NONE",
+                            "truncation": 0.08,
+                        },
+                        "language": "FASTEXPR",
+                        "result_evidence": {
+                            "metrics": {"SHARPE": 1.0},
+                            "checks": [{"name": blocker, "status": "FAIL"}],
+                            "observed_at": "2026-09-22T00:00:00Z",
+                            "source": "BRAIN:matrix",
+                            "response_complete": True,
+                            "authenticated": True,
+                        },
+                    }
+                )
+                self.assertTrue(initialized["initialized"], initialized)
+
+                assessments = []
+                observation_refs = []
+                for index, method in enumerate(entry["mechanisms"], start=1):
+                    evidence_id = f"E_EX_{sequence}_{index}"
+                    registered = store.register_evidence(
+                        {
+                            "id": evidence_id,
+                            "kind": "DIAGNOSTIC_EXCLUSION",
+                            "subject": method["id"],
+                            "source": "BRAIN:matrix_diagnostic",
+                            "observed_at": guard._now_iso(),
+                            "claim": f"Current targeted diagnostic excludes mechanism {method['id']} for blocker {blocker}.",
+                        }
+                    )
+                    self.assertTrue(registered["ok"], registered)
+                    observation_refs.append(evidence_id)
+                    assessments.append(
+                        {
+                            "id": f"A_EX_{sequence}_{index}",
+                            "mechanism": method["id"],
+                            "method_family": method["method_family"],
+                            "status": "EXCLUDED",
+                            "evidence_refs": [evidence_id],
+                            "reasoning": "A current mechanism-specific diagnostic excludes this family.",
+                            "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                            "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                        }
+                    )
+
+                plan = {
+                    "based_on_evidence_revision": store.read()["evidence_revision"],
+                    "synthesis": {
+                        "blockers": [
+                            {
+                                "name": blocker,
+                                "target": entry["target"],
+                                "owner": entry["owner"],
+                                "observation_refs": observation_refs,
+                                "mechanisms": assessments,
+                            }
+                        ]
+                    },
+                    "routes": [],
+                }
+                accepted = store.set_plan(plan)
+                self.assertTrue(accepted["ok"], accepted)
+                self.assertEqual(accepted["plan"]["status"], "EXHAUSTED")
+
+
 if __name__ == "__main__":
     import unittest
 
