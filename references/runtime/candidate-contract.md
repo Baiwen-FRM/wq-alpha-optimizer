@@ -8,7 +8,7 @@
 - `incumbent` 是当前正式 promotion 的 parent；candidate 的 `parent_id` 必须等于它。
 - locked scope：`region / delay / universe / instrumentType` 不得由普通 candidate 修改。
 - Root 已用 fields 自动允许；新 field 只能用已注册的 `FIELD_SCOPE` evidence 单独加入 allowlist。
-- legacy schema-4 run 可读取历史状态、完成已有在途 transport/result closure，但**不能开启新的 focus/hypothesis**；首次成功 `set-plan` 后升级为 v1 planning contract，不改写历史事实。
+- legacy schema-4 run 可读取历史状态、完成已有在途 transport/result closure，但**不能开启新的 focus/hypothesis**；首次成功 `set-plan` 后升级为兼容的 v1 route-binding contract，不改写历史事实。新初始化 run 使用 v2 planning contract：在 route 之前增加 evidence+method synthesis gate。
 
 ### 1A. Current Incumbent Result/check refresh
 
@@ -58,37 +58,90 @@ Guard 会按 `kind / subject / source / claim` 保存一个 informational conten
 }
 ```
 
-## 3. Optimization plan
+## 3. Evidence synthesis + optimization plan
 
-Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。它只承载 controller 根据已注册 evidence 形成的执行顺序；guard 不判断 route 的经济正确性。
+Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。Guard 不判断经济 thesis 的真伪，但会验证：当前 blocker 是否经过合法 method-family synthesis、route 是否来自一个可测试 assessment、空 plan 是否真的完成了 no-action proof。经济判断仍由 controller + Primary reference 负责。
+
+新 run 的 planning contract 是 v2。Plan 先包含 `synthesis`，再包含执行 routes。最小示意：
 
 ```json
 {
-  "revision": 1,
   "based_on_evidence_revision": 12,
-  "final_replan_used": false,
-  "status": "ACTIVE",
+  "synthesis": {
+    "blockers": [
+      {
+        "name": "LOW_SUB_UNIVERSE_SHARPE",
+        "target": "LOW_SUB_UNIVERSE_SHARPE",
+        "owner": "optimization/subuniverse.md",
+        "observation_refs": ["E_SUB", "E_CAP"],
+        "mechanisms": [
+          {
+            "id": "A_SIZE",
+            "mechanism": "size_breadth_exposure",
+            "method_family": "exposure_control_or_grouping",
+            "status": "PLAUSIBLE_PROBE",
+            "evidence_refs": ["E_SUB", "E_CAP"],
+            "reasoning": "Cap-conditioned Sharpe and the active blocker justify a bounded size/breadth test, but do not prove the exact repair.",
+            "next_question": "Does one thesis-preserving exposure intervention improve sub-universe robustness?"
+          }
+        ]
+      }
+    ]
+  },
   "routes": [
     {
       "id": "R1",
       "target": "LOW_SUB_UNIVERSE_SHARPE",
       "owner": "optimization/subuniverse.md",
-      "mechanism": "breadth_robustness",
-      "evidence_refs": ["E1"],
-      "rationale": "Current blocker and exposure evidence support this mechanism.",
-      "status": "ACTIVE"
+      "mechanism": "size_breadth_exposure",
+      "evidence_refs": ["E_SUB", "E_CAP"],
+      "assessment_refs": ["A_SIZE"],
+      "rationale": "Test the mechanism indicated by current cap-conditioned performance."
     }
   ]
 }
 ```
 
-每条 route 必须引用已注册 evidence，并提供 mechanism-level rationale；只因为 operator catalog 存在某个 operator 不能建 route。route 数组顺序是 ordered execution priority，guard 固化为 `priority=1..N`。一次最多一个 `ACTIVE` route，active focus 必须绑定该 route。`PENDING` route 不是 candidate，也不触发其 Primary reference 的加载。
+Assessment status 只允许：
 
-每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 plan snapshot 自相矛盾，guard 拒绝。`EXHAUSTED` route 不能因为重复读取同一事实自动复活。若新 plan 要重开同一 Incumbent cycle 内的同一 `target/owner/mechanism`，必须提供 `reopen_reason` 和 exhaustion 之后、且 fingerprint 实质新颖的 `new_observation_refs`；仅换 evidence ID 或 timestamp 不够。Promotion 后的新 Incumbent 不继承前任的 route exhaustion；它可以基于自己的 fresh profile 重新使用同一个 mechanism。
+- `ACTIONABLE`：当前 evidence 已支持一个明确的机制问题，可直接进入最小实验；
+- `PLAUSIBLE_PROBE`：真实原因仍未知，但 evidence + owner method family 足以支持一个有区分力的有限实验；
+- `NEEDS_DIAGNOSTIC`：当前事实不能区分机制，且存在具体 in-scope discriminator；
+- `EXCLUDED`：有当前、可审计的机制级证据足以排除。历史“以前试过”或 generic blocker fact 不能单独充当 exclusion。
 
-Promotion 或 current-result refresh 会把旧 plan 标记 `STALE`。Root 第一次 Profile、promotion 后的新 Incumbent、以及同一 Incumbent 的合法 STALE re-profile，都允许得到空 fresh plan（状态为 `EXHAUSTED`）；不得为了满足非空 plan 约束而虚构 route。新 Incumbent 会重置 `final_replan_used=false`；同一 Incumbent refresh 不重置该 cycle 已消耗的 final re-plan。
+每个 assessment 必须使用该 blocker catalog 中允许的 `method_family`，并引用 plan snapshot 当时已注册的 evidence。描述性 `mechanism` 可以比 catalog id 更具体，但不能脱离 owner 允许的方法族。
 
-当前 plan 的 routes 全部 terminal 后，controller 只能执行一次 `final-replan`；同一 Incumbent cycle 不得继承已消耗的 final re-plan，新 Incumbent 会开启新的 cycle。没有 OPEN hypothesis、OPEN focus、ACTIVE/PENDING route 且 final re-plan 为空时，guard 才允许 `COMPLETED_WITH_EXHAUSTION`；`SUCCESS/SUBMISSION_READY` 在没有 OPEN hypothesis/focus 时可以结束已因 promotion 变成 `STALE` 的旧 plan。
+正常有 route 的 plan **不要求把整个方法库逐项审批**。只要被选 route 有合法 `ACTIONABLE / PLAUSIBLE_PROBE` assessment 即可继续实验。route 必须：
+
+- 引用至少一个 `assessment_ref`；
+- target / owner / mechanism 与 assessment 一致；
+- `route.evidence_refs` 不得丢掉 assessment 实际使用的 evidence；
+- route 数组顺序就是执行 priority，一次最多一个 `ACTIVE`，其余为 `PENDING`。
+
+一个上游 mechanism 可以通过 `explains_blockers` 同时解释多个 blocker，但 synthesis 中每个被声明 blocker 都必须存在兼容 assessment；不能从“同时 FAIL”直接推断共因。
+
+### Empty-plan / exhaustion gate
+
+`routes=[]` 是强结论，不是普通 planning shortcut。当前仍有 FAIL blocker 时，空 plan 必须满足：
+
+1. synthesis 覆盖每个当前 blocker；
+2. 对每个 blocker，catalog 当前列出的全部 method families 都已评估；
+3. 不得剩余 `ACTIONABLE / PLAUSIBLE_PROBE`；
+4. 不得剩余 `NEEDS_DIAGNOSTIC`；
+5. 所有 `EXCLUDED` 都有合法 exclusion basis 与对应 evidence。
+
+否则 Guard 分别拒绝为：
+
+- `EMPTY_PLAN_HAS_TESTABLE_MECHANISM`
+- `EMPTY_PLAN_DIAGNOSTIC_REQUIRED`
+- `EMPTY_PLAN_METHOD_SPACE_UNASSESSED`
+- 或 `SYNTHESIS_CONTRACT`
+
+因此 Root first profile、STALE re-profile、promotion 后 new Incumbent、以及 `final-replan` 都不能再仅凭“历史上试过很多方法”安装空 plan。空 plan 只有通过同一 no-action gate 才能成为 `EXHAUSTED`。
+
+每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 snapshot 自相矛盾。若新 plan 要重开同一 Incumbent cycle 内相同 `target/owner/mechanism`，仍必须提供 `reopen_reason` 和 exhaustion 之后 fingerprint 实质新颖的 `new_observation_refs`。Promotion 后的新 Incumbent 不继承前任 route exhaustion。
+
+Promotion 或 material current-result refresh 会使旧 plan `STALE`。新 Incumbent 重置 `final_replan_used=false`；同一 Incumbent refresh 不重置已消耗的 final re-plan。当前 routes 全部 terminal 后只能执行一次 `final-replan`，而 final empty plan 仍必须重新通过上述 synthesis/no-action gate。
 
 ### Route closure evidence gate
 
@@ -116,7 +169,7 @@ ACTIVE route 的正常 terminal transition 需要满足至少一个条件：
 
 `Evidence Exhausted` 会关闭当前 focus。exhausted family 由 `type + owner + target + mechanism` 定义；同 target/owner 但不同 mechanism 的 pending route 是不同 family，不应被前一个 focus 的 exhaustion 锁死。真正重开同一 exhausted route 时，新的 focus 必须实际引用该 route 的 `new_observation_refs` 中至少一条；仅注册无关/重复 evidence 或继续只引用旧 evidence 都不够。
 
-在 v1 planning contract 中，hypothesis 的 `target` 和 `mechanism` 都必须与当前 active focus/route 一致；不能绑定到一个 route 后跳去测试另一个 blocker，也不能在同一 target 下偷偷切换到另一个 mechanism family。
+在 v1/v2 route-binding contract 中，hypothesis 的 `target` 和 `mechanism` 都必须与当前 active focus/route 一致；不能绑定到一个 route 后跳去测试另一个 blocker，也不能在同一 target 下偷偷切换到另一个 mechanism family。
 
 ## 5. Frozen hypothesis contract
 

@@ -77,21 +77,96 @@ class CoreGuardTests(TestCase):
 
     def _set_plan(self, store=None, *, mechanism="signal_quality", target="SHARPE", owner="optimization/sharpe.md", evidence="E1"):
         store = store or self.store
-        return store.set_plan(
-            {
-                "based_on_evidence_revision": store.read()["evidence_revision"],
-                "routes": [
+        state = store.read()
+        plan = {
+            "based_on_evidence_revision": state["evidence_revision"],
+            "routes": [
+                {
+                    "id": "R1",
+                    "target": target,
+                    "owner": owner,
+                    "mechanism": mechanism,
+                    "evidence_refs": [evidence],
+                    "rationale": "Current evidence supports this mechanism.",
+                }
+            ],
+        }
+        blockers = guard._current_blockers(state)
+        if blockers:
+            blocker = blockers[0]
+            entry = guard._catalog_entry_for_blocker(blocker)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = "A1"
+            plan["synthesis"] = {
+                "blockers": [
                     {
-                        "id": "R1",
+                        "name": blocker,
                         "target": target,
                         "owner": owner,
-                        "mechanism": mechanism,
-                        "evidence_refs": [evidence],
-                        "rationale": "Current evidence supports this mechanism.",
+                        "observation_refs": [evidence],
+                        "mechanisms": [
+                            {
+                                "id": assessment_id,
+                                "mechanism": mechanism,
+                                "method_family": method_family,
+                                "status": "PLAUSIBLE_PROBE",
+                                "evidence_refs": [evidence],
+                                "reasoning": "Current evidence plus the blocker method family justifies one falsifiable probe.",
+                                "next_question": "Does this mechanism improve the active target without protected-metric damage?",
+                            }
+                        ],
                     }
-                ],
+                ]
             }
-        )
+            plan["routes"][0]["assessment_refs"] = [assessment_id]
+        return store.set_plan(plan)
+
+    def _no_action_plan(self, store=None, *, evidence_id="E_NO_ACTION"):
+        store = store or self.store
+        rows = []
+        for blocker in guard._current_blockers(store.read()):
+            entry = guard._catalog_entry_for_blocker(blocker)
+            mechanisms = []
+            observation_refs = []
+            for index, item in enumerate(entry["mechanisms"], start=1):
+                ref = f"{evidence_id}_{blocker}_{index}"
+                if ref not in store.read()["evidence"]:
+                    self._register(
+                        store,
+                        ref,
+                        "DIAGNOSTIC_EXCLUSION",
+                        item["id"],
+                        "BRAIN:test_diagnostic",
+                        f"Current targeted diagnostic excludes mechanism {item['id']} for this test.",
+                        observed_at=guard._now_iso(),
+                    )
+                observation_refs.append(ref)
+                mechanisms.append(
+                    {
+                        "id": f"X_{blocker}_{index}",
+                        "mechanism": item["id"],
+                        "method_family": item["method_family"],
+                        "status": "EXCLUDED",
+                        "evidence_refs": [ref],
+                        "reasoning": "Current targeted diagnostic excludes this mechanism for the test state.",
+                        "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                        "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                    }
+                )
+            rows.append(
+                {
+                    "name": blocker,
+                    "target": entry["target"],
+                    "owner": entry["owner"],
+                    "observation_refs": observation_refs,
+                    "mechanisms": mechanisms,
+                }
+            )
+        return {
+            "based_on_evidence_revision": store.read()["evidence_revision"],
+            "synthesis": {"blockers": rows},
+            "routes": [],
+        }
 
     def _open_focus(self, store=None, *, mechanism="signal_quality"):
         store = store or self.store
@@ -381,9 +456,9 @@ class CoreGuardTests(TestCase):
         self.assertIn("protected_metric:FITNESS", result["evaluation"]["missing"])
 
     def test_same_incumbent_stale_empty_reprofile_preserves_final_replan_usage(self):
-        empty = self.store.set_plan({"routes": []})
+        empty = self.store.set_plan(self._no_action_plan())
         self.assertTrue(empty["ok"], empty)
-        final = self.store.set_plan({"routes": []}, final_replan=True)
+        final = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_FINAL"), final_replan=True)
         self.assertTrue(final["ok"], final)
         self.assertTrue(final["plan"]["final_replan_used"])
 
@@ -399,7 +474,7 @@ class CoreGuardTests(TestCase):
             }
         )
         self.assertEqual(refreshed["plan_status"], "STALE")
-        replacement = self.store.set_plan({"routes": []})
+        replacement = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_REFRESH"))
         self.assertTrue(replacement["ok"], replacement)
         self.assertTrue(replacement["plan"]["final_replan_used"])
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Fresh re-profile still found no justified route.")

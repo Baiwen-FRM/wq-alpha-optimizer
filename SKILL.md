@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.5.4
+  version: 3.6.0
 ---
 
 # WQ Alpha Optimizer
@@ -24,9 +24,10 @@ metadata:
 - **Result facts before conclusions.** 平台结果/check evidence 先于“成功/失败”叙事；指标变好本身不等于机制得到支持。
 - **Stop is a valid outcome.** 当前 scope 内没有新的合理可证伪问题时停止，而不是扩大自由度；但如果一个当前 scope 内可取得的 diagnostic 能实质区分机制，必须先完成/复用该诊断，不能把“还没诊断”写成 evidence exhaustion。
 - **Plan before focus, then continue.** 在第一次 candidate 前，先用已注册 evidence 形成 ordered mechanism-level optimization plan；多个 route 可以 pending，但一次只执行一个 active route，hypothesis 必须绑定该 route 的 target + mechanism。Plan/Profile 只是内部控制状态，不是正常 optimize 请求的交付物；只要 plan 有 ACTIVE route，必须在同一次执行继续到 Focus → Hypothesis → Candidate → Simulation/Result。
+- **Evidence and methods are one diagnosis step.** Mandatory intake facts are not a separate report from blocker repair references. After intake, combine current observations with the active blocker owner's method families using `references/runtime/evidence-method-synthesis.md`. If the cause is unknown, use a falsifiable `PLAUSIBLE_PROBE` or `NEEDS_DIAGNOSTIC`; do not pretend the cause is known, and do not jump from blocker name alone to a generic operator recipe. Historical “tried before” evidence cannot by itself exclude a whole mechanism family.
 - **Four mandatory intake surfaces.** 在第一次分析/评判前必须取得：① Expression + Settings；② current Result + submission checks；③ 实际使用 Data Field / Dataset 的 exact metadata；④ Visualization diagnostic 的完整当前可用 recordsets。若 Root 本身没有 rich recordsets，则用同 expression、同 settings、仅 `visualization=true` 做一次 diagnostic simulation，再读取平台列出的全部 available recordsets。平台暂时缺失/单个 recordset 不可读时记录 incomplete/unavailable，但不能把整块 visualization 静默跳过。
 - **Fresh facts invalidate stale execution.** Incumbent promotion 或显式 fresh Result/check refresh 后，旧 plan 不得继续机械执行；重新 Profile/Plan。旧 legacy run 只能完成已有在途工作，不能在未安装 v1 plan 时开启新的 focus/hypothesis。
-- **Focus exhaustion is not run exhaustion.** 当前 route 耗尽后切换下一个 pending route；Root/Incumbent profile 可以合法得到空 plan，不得为了继续而虚构 route。只有该 Incumbent cycle 的一次 final re-plan 也没有新 justified route 时，才以 exhaustion 结束 run。
+- **Focus exhaustion is not run exhaustion.** 当前 route 耗尽后切换下一个 pending route。空 plan 只有在 synthesis 对当前 blocker 的 catalog method families 做了完整、可审计的 no-action proof 时才合法；不能因为历史上“试过很多方法”就把未评估的方法空间当成 exhausted。只有该 Incumbent cycle 的一次 final re-plan 也通过同样的 no-action gate 时，才以 exhaustion 结束 run。
 - **No zero-work route closure.** 一条 route 一旦成为 `ACTIVE`，不能只靠 planning 时已经存在的 blocker、历史实验或旧 evidence 立刻关闭。Guard 只允许两种正常关闭依据：①该 route 已产生至少一个绑定的 evaluated candidate Result；②route 激活之后出现了一个 fingerprint 实质新的 diagnostic evidence，并在 `close-route/exhaust-focus --evidence-ref` 中显式引用。否则返回 `ROUTE_REQUIRES_CANDIDATE_RESULT_OR_NEW_EVIDENCE`。这条约束是 machine-enforced，不依赖 controller 自律。
 - **Terminal means terminal.** `SUBMISSION_READY` 必须由当前 Incumbent 的完整、认证、可审计 checks 证明；`USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，结束后不再改变 research state。
 
@@ -34,6 +35,6 @@ metadata:
 
 正式路由入口是 `references/index.md`：planning 可以识别多个 evidence-supported route/owner，但执行时只加载当前 active route 的一个 Primary owner；不要预加载全部 optimization references。
 
-Expression/settings、Result/checks、used-field metadata 与 visualization/recordsets 四类必需事实都走单入口 deterministic bootstrap；controller 不再手工串联 start-run / intake / init / dashboard。Bootstrap 完成后立即进入分析与优化，不得把“intake/Profile/Plan 完成”作为正常终点。
+Expression/settings、Result/checks、used-field metadata 与 visualization/recordsets 四类必需事实都走单入口 deterministic bootstrap；controller 不再手工串联 start-run / intake / init / dashboard。Bootstrap 后先做 evidence + method synthesis，再形成 route；不得把 intake、synthesis、Profile/Plan 当成正常终点。
 
 真实 FE 查询、checks、field metadata、recordsets、correlation 和 simulation 使用本地已认证的 WQ Lab/`wq_lib`，接口边界见 `references/runtime/wq-lab-provider.md`。正常路径不再静默切回 CNHKMCP。Python Alpha 的转换、实现和 Python 专属回测由 `wq-python-alpha` 负责。

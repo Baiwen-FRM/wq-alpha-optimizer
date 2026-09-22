@@ -48,7 +48,21 @@ expression node → operator/transformation → field → dataset → idea role
 
 区分平台事实、结构推断、未证实假设。字段名不能代替字段语义；field description 应参与 expression node → idea role 的解释，但 description 本身不证明 PIT、lag、update cadence、unit 或 missing semantics。
 
-先基于 mandatory intake 的四类信息进行完整判断：expression/settings 给结构与约束，Result/checks 给目标，field metadata 给数据语义，visualization/recordsets 给时间稳定性、coverage、size/sector/industry exposure 等横截面信息。recordsets 是基础信息面；只有其中能实际支持某个机制判断的内容才注册为 routing evidence。若这四类信息之外仍存在一个能实质区分机制的 in-scope diagnostic，再增加 targeted deep diagnostic，而不是重新做一遍普遍 intake。
+先基于 mandatory intake 的四类信息进行完整判断：expression/settings 给结构与约束，Result/checks 给目标，field metadata 给数据语义，visualization/recordsets 给时间稳定性、coverage、size/sector/industry exposure 等横截面信息。recordsets 是基础信息面；只有其中能实际支持某个机制判断的内容才注册为 routing evidence。
+
+随后执行 **Evidence + Method Synthesis**，规则只由 `evidence-method-synthesis.md` 维护：把当前 blocker、已注册 observations 与该 blocker Primary owner 的 method families 放在同一张机制判断里。现有证据不需要“直接证明真实原因”；证据不足但存在一个合理、可证伪的问题时标 `PLAUSIBLE_PROBE`，有明确 in-scope discriminator 时标 `NEEDS_DIAGNOSTIC`，证据较强且可直接实验时标 `ACTIONABLE`。不要从 blocker 名称直接跳到 operator，也不要因为当前因果未知就结束。
+
+可以用：
+
+```text
+python3 scripts/mechanism_synthesis.py \
+  --state <STATE_PATH> \
+  --root-alpha-id <ROOT_ALPHA_ID>
+```
+
+生成当前 blocker × method-family scaffold；controller 只负责根据当前 facts 填 assessment，不让脚本猜经济原因。
+
+若这四类信息之外仍存在一个能实质区分当前 `NEEDS_DIAGNOSTIC` 机制的 in-scope diagnostic，再增加 targeted deep diagnostic，而不是重新做一遍普遍 intake。
 
 **Diagnostic escalation before exhaustion.** 如果当前 blocker 的 Primary reference 明确指出某个 in-scope diagnostic 能区分候选机制，而 Root 当前 evidence 缺少这个 diagnostic，则在开 candidate 或声明 exhaustion 前先补这个信息面。典型情况：Sub-Universe / Robust-Universe / exposure 类 blocker 需要 cap/sector/industry/liquidity/coverage bucket 证据，但 Root 只返回基础 PnL/yearly recordsets；此时若同表达式、同 settings、仅 `visualization=true` 的 diagnostic control 能暴露 recordsets，应先运行一次该 control，并对 recordset discovery 做有界重试。这个 control 是诊断，不是 optimization candidate，不进入 promotion 比较。
 
@@ -67,11 +81,12 @@ expression node → operator/transformation → field → dataset → idea role
 
 - 聚合 expression/settings、Result/checks、fields/dataset/type/coverage、PnL/时间稳定性、可用 exposure/concentration、expression structure 与历史实验；拿不到的内容写 unknown，不猜；
 - 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能审计到 candidate expression/settings/result/disposition **以及当时 frozen success/protection contract**；只有“以前试过”这种摘要不能自动继承 exhaustion。尤其不能把“candidate 有方向性改善但最终 check 仍 FAIL，所以当时被 REFUTED”的旧记录直接当成 mechanism-negative evidence；需要按当前 progressive contract 重新解释。身份不匹配、事实漂移或旧 contract 无法审计时，历史 run 只作背景，不阻止当前 run 重新诊断；
-- 每条 route 必须有 target、Primary owner、mechanism、evidence refs 和 rationale；operator 存在性不是 route evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“可能需要更多诊断”，先留在 DIAGNOSE，不要先建 route 再立刻 evidence-exhaust；
+- Plan 必须携带当前 `synthesis`。每条 route 必须有 target、Primary owner、mechanism、evidence refs、`assessment_refs` 和 rationale；operator 存在性不是 route evidence。route 只能引用 `ACTIONABLE / PLAUSIBLE_PROBE` assessment，并保留该 assessment 实际使用的 evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“需要某个 discriminator”，先完成 `NEEDS_DIAGNOSTIC`，不要先建 route 再立刻 evidence-exhaust；
+- 一个上游 mechanism 可以解释多个 blocker，但只有 synthesis 对每个被声明的 blocker 都有 compatible assessment 时，route 才能写 `explains_blockers`；不能因为两个 blocker 同时存在就自行宣称共因；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；
-- 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。Root 第一次 Profile 或任何合法 `STALE` re-profile 都可以得到**空 fresh plan**；这表示“没有 justified normal route”，不是 planner 失败，也不得为了满足非空约束虚构 route；
+- 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。**空 plan 不是普通 shortcut。** 如果当前仍有 FAIL blocker，想写 `routes=[]`，synthesis 必须覆盖该 blocker catalog 中全部当前 method families，并且不能剩下 `ACTIONABLE / PLAUSIBLE_PROBE / NEEDS_DIAGNOSTIC`；否则 guard 分别返回 `EMPTY_PLAN_HAS_TESTABLE_MECHANISM / EMPTY_PLAN_DIAGNOSTIC_REQUIRED / EMPTY_PLAN_METHOD_SPACE_UNASSESSED`。历史“以前试过很多方法”不能替代这个 no-action proof；
 - Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
-- 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 仍为空才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
+- 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 如果想为空，仍必须重新通过同一个 evidence+method no-action gate；不能用第一次 profile 的旧“空 plan”结论直接继承。通过后才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
 - **Plan 写入后立即执行。** `set-plan` 若返回 `must_continue=true` / `next_required_action=SET_FOCUS`，controller 必须立即进入 Stage D；正常 optimize 请求不得在这里结束或向用户报告“下一步再继续”。
 
 ## Stage D — FOCUS

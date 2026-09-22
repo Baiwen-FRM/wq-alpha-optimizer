@@ -72,10 +72,31 @@ class PlanningGuardTests(TestCase):
         )
         return evidence_id
 
+    def _blocker_for_route(self, target, owner):
+        if target == "SHARPE" and owner == "optimization/sharpe.md":
+            return "LOW_SHARPE"
+        if target == "LOW_SUB_UNIVERSE_SHARPE":
+            return "LOW_SUB_UNIVERSE_SHARPE"
+        if target == "TURNOVER":
+            return "HIGH_TURNOVER"
+        if target == "LOW_2Y_SHARPE":
+            return "LOW_2Y_SHARPE"
+        if target == "PROD_CORRELATION":
+            return "PROD_CORRELATION"
+        if target == "SELF_CORRELATION":
+            return "SELF_CORRELATION"
+        return next(iter(guard._current_blockers(self.store.read())), "LOW_SHARPE")
+
     def _plan(self, *routes):
-        return {
-            "based_on_evidence_revision": 2,
-            "routes": [
+        revision = self.store.read()["evidence_revision"]
+        plan_routes = []
+        synthesis_rows = {}
+        for route_id, target, owner, mechanism, refs, rationale in routes:
+            blocker = self._blocker_for_route(target, owner)
+            entry = guard._catalog_entry_for_blocker(blocker)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = f"A_{route_id}"
+            plan_routes.append(
                 {
                     "id": route_id,
                     "target": target,
@@ -83,9 +104,110 @@ class PlanningGuardTests(TestCase):
                     "mechanism": mechanism,
                     "evidence_refs": refs,
                     "rationale": rationale,
+                    "assessment_refs": [assessment_id],
                 }
-                for route_id, target, owner, mechanism, refs, rationale in routes
-            ],
+            )
+            row = synthesis_rows.setdefault(
+                blocker,
+                {
+                    "name": blocker,
+                    "target": target,
+                    "owner": owner,
+                    "observation_refs": list(refs),
+                    "mechanisms": [],
+                },
+            )
+            row["mechanisms"].append(
+                {
+                    "id": assessment_id,
+                    "mechanism": mechanism,
+                    "method_family": method_family,
+                    "status": "PLAUSIBLE_PROBE",
+                    "evidence_refs": list(refs),
+                    "reasoning": "Current evidence plus the owner method family justifies a falsifiable probe.",
+                    "next_question": "Does this mechanism improve the target without protected-metric damage?",
+                }
+            )
+
+        current_blockers = guard._current_blockers(self.store.read())
+        for blocker in current_blockers:
+            if blocker in synthesis_rows:
+                continue
+            entry = guard._catalog_entry_for_blocker(blocker)
+            evidence_ref = "E1" if "E1" in self.store.read()["evidence"] else next(iter(self.store.read()["evidence"]), None)
+            if not evidence_ref:
+                continue
+            mechanism = entry["mechanisms"][0]["id"]
+            synthesis_rows[blocker] = {
+                "name": blocker,
+                "target": entry["target"],
+                "owner": entry["owner"],
+                "observation_refs": [evidence_ref],
+                "mechanisms": [
+                    {
+                        "id": f"A_{blocker}_background",
+                        "mechanism": mechanism,
+                        "method_family": entry["mechanisms"][0]["method_family"],
+                        "status": "NEEDS_DIAGNOSTIC",
+                        "evidence_refs": [evidence_ref],
+                        "reasoning": "The current blocker remains unresolved while another route is planned.",
+                        "next_question": "What evidence would distinguish this blocker mechanism?",
+                    }
+                ],
+            }
+
+        return {
+            "based_on_evidence_revision": revision,
+            "synthesis": {"blockers": list(synthesis_rows.values())},
+            "routes": plan_routes,
+        }
+
+    def _no_action_plan(self, evidence_id="E_NO_ACTION"):
+        rows = []
+        for blocker in guard._current_blockers(self.store.read()):
+            entry = guard._catalog_entry_for_blocker(blocker)
+            mechanisms = []
+            observation_refs = []
+            for index, item in enumerate(entry["mechanisms"], start=1):
+                ref = f"{evidence_id}_{blocker}_{index}"
+                if ref not in self.store.read()["evidence"]:
+                    registered = self.store.register_evidence(
+                        {
+                            "id": ref,
+                            "kind": "DIAGNOSTIC_EXCLUSION",
+                            "subject": item["id"],
+                            "source": "BRAIN:test_diagnostic",
+                            "observed_at": guard._now_iso(),
+                            "claim": f"Current targeted diagnostic excludes mechanism {item['id']}.",
+                        }
+                    )
+                    self.assertTrue(registered["ok"], registered)
+                observation_refs.append(ref)
+                mechanisms.append(
+                    {
+                        "id": f"X_{blocker}_{index}_{evidence_id}",
+                        "mechanism": item["id"],
+                        "method_family": item["method_family"],
+                        "status": "EXCLUDED",
+                        "evidence_refs": [ref],
+                        "reasoning": "Current targeted diagnostic excludes this mechanism in the test state.",
+                        "next_question": "No in-scope falsifiable question remains for this mechanism.",
+                        "exclusion_basis": "CURRENT_DIAGNOSTIC",
+                    }
+                )
+            rows.append(
+                {
+                    "name": blocker,
+                    "target": entry["target"],
+                    "owner": entry["owner"],
+                    "observation_refs": observation_refs,
+                    "mechanisms": mechanisms,
+                }
+            )
+        return {
+            "based_on_evidence_revision": self.store.read()["evidence_revision"],
+            "synthesis": {"blockers": rows},
+            "routes": [],
         }
 
     def _open_focus(self, route_id="R1", target="SHARPE", owner="optimization/sharpe.md", evidence="E1", blocker="LOW_SHARPE"):
@@ -252,7 +374,7 @@ class PlanningGuardTests(TestCase):
         self.store.exhaust_focus("R1 exhausted.", close_ref)
         blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No more routes.")
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
-        replan = self.store.set_plan({"routes": []}, final_replan=True)
+        replan = self.store.set_plan(self._no_action_plan("E_NO_ACTION_FINAL"), final_replan=True)
         self.assertTrue(replan["ok"], replan)
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
         self.assertTrue(finished["ok"], finished)
@@ -265,7 +387,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         close_ref = self._post_activation_evidence("E_CLOSE_ONCE")
         self.store.exhaust_focus("R1 exhausted.", close_ref)
-        self.assertTrue(self.store.set_plan({"routes": []}, final_replan=True)["ok"])
+        self.assertTrue(self.store.set_plan(self._no_action_plan("E_NO_ACTION_ONCE"), final_replan=True)["ok"])
         result = self.store.set_plan({"routes": []}, final_replan=True)
         self.assertEqual(result["reason"], "FINAL_REPLAN_ALREADY_USED")
 
@@ -529,7 +651,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus(route_id="R3")
         close_ref = self._post_activation_evidence("E_CLOSE_NEW_INCUMBENT")
         self.store.exhaust_focus("The new incumbent route is exhausted.", close_ref)
-        one_more = self.store.set_plan({"routes": []}, final_replan=True)
+        one_more = self.store.set_plan(self._no_action_plan("E_NO_ACTION_NEW_INCUMBENT"), final_replan=True)
         self.assertTrue(one_more["ok"], one_more)
 
     def test_legacy_set_plan_upgrades_to_v1_binding(self):
@@ -562,7 +684,7 @@ class PlanningGuardTests(TestCase):
         self._open_focus()
         self._promote_current_plan(child_id="CHILD_EMPTY_PLAN")
 
-        fresh = self.store.set_plan({"routes": []})
+        fresh = self.store.set_plan(self._no_action_plan())
         self.assertTrue(fresh["ok"], fresh)
         self.assertEqual(fresh["plan"]["status"], "EXHAUSTED")
         self.assertEqual(fresh["plan"]["incumbent_alpha_id"], "CHILD_EMPTY_PLAN")
@@ -575,7 +697,7 @@ class PlanningGuardTests(TestCase):
         )
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
 
-        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        final_replan = self.store.set_plan(self._no_action_plan("E_NO_ACTION_CHILD_FINAL"), final_replan=True)
         self.assertTrue(final_replan["ok"], final_replan)
         self.assertTrue(final_replan["plan"]["final_replan_used"])
 
@@ -587,14 +709,28 @@ class PlanningGuardTests(TestCase):
 
 
 
-    def test_initial_empty_plan_can_reach_exhaustion_without_fabricated_route(self):
-        empty = self.store.set_plan({"routes": []})
+    def test_initial_empty_plan_requires_evidence_method_no_action_proof(self):
+        missing = self.store.set_plan({"routes": []})
+        self.assertFalse(missing["ok"])
+        self.assertEqual(missing["reason"], "SYNTHESIS_CONTRACT")
+
+        plausible = self._plan(
+            ("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "A falsifiable probe remains.")
+        )
+        plausible["routes"] = []
+        testable = self.store.set_plan(plausible)
+        self.assertFalse(testable["ok"])
+        self.assertEqual(testable["reason"], "EMPTY_PLAN_HAS_TESTABLE_MECHANISM")
+
+        empty = self.store.set_plan(self._no_action_plan("E_NO_ACTION_INITIAL"))
         self.assertTrue(empty["ok"], empty)
         self.assertEqual(empty["plan"]["status"], "EXHAUSTED")
-        self.assertEqual(empty["plan"]["routes"], [])
         blocked = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "No justified normal route exists.")
         self.assertEqual(blocked["reason"], "FINAL_REPLAN_REQUIRED")
-        final_replan = self.store.set_plan({"routes": []}, final_replan=True)
+        final_replan = self.store.set_plan(
+            self._no_action_plan("E_NO_ACTION_INITIAL_FINAL"),
+            final_replan=True,
+        )
         self.assertTrue(final_replan["ok"], final_replan)
         finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Final re-plan found no justified route.")
         self.assertTrue(finished["ok"], finished)
