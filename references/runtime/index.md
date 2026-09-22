@@ -4,6 +4,7 @@
 
 - `alpha-intake.md`：执行顺序与 run-log 入口。
 - `candidate-contract.md`：机器状态、current-result refresh、证据绑定、plan/focus/hypothesis、candidate、transport、result、promotion、readiness 与 terminal。
+- `evidence-method-synthesis.md`：mandatory evidence + blocker method families → mechanism assessments → route / diagnostic / auditable no-action proof。
 - `operators.md`：FE tokenization/counting 与 operator-role 口径。
 - `anchors.md`：generic numeric anchors。
 - `regional.md`：当前 region/delay/universe 的诊断语境。
