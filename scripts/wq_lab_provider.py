@@ -142,17 +142,17 @@ def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> 
         for key, value in raw_metrics.items()
         if not isinstance(value, bool) and isinstance(value, (int, float))
     }
-    transient_statuses = {"PENDING", "UNKNOWN", "RUNNING", "PROCESSING"}
-    checks_terminal = bool(dedicated_checks) and all(
-        str(row.get("status") or "").upper() not in transient_statuses
-        for row in dedicated_checks
-    )
+    # response_complete means the current Result + dedicated check snapshot
+    # is structurally present. A PENDING/UNKNOWN check is still a real current
+    # observation; readiness policy is handled by Guard rather than hidden in
+    # the provider.
+    checks_present = bool(dedicated_checks)
     return {
         "alpha_id": alpha_id,
         "simulation_id": simulation_id,
         "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "source": "BRAIN:wq_lib.get_result+get_submission_check",
-        "response_complete": checks_terminal,
+        "response_complete": checks_present,
         "authenticated": True,
         "metrics": metrics,
         "checks": dedicated_checks,
