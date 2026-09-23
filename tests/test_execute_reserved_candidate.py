@@ -272,6 +272,87 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertEqual(second["stage"], "POST_RECONCILIATION_REQUIRED")
         self.assertEqual(wq.start_calls, 1)
 
+    def test_confirmed_post_state_write_exception_recovers_by_location_without_repost(self):
+        wq = SequenceWQ(
+            [FakeResponse(201, location="/simulations/S-record-recovery")],
+            [{"status": "done", "alpha_id": "CHILD"}],
+        )
+        original_record = self.store.record_transport
+
+        def fail_post_record(fingerprint, status, simulation_id=None):
+            if status == "POSTED":
+                raise RuntimeError("simulated state write interruption")
+            return original_record(fingerprint, status, simulation_id)
+
+        with patch.object(self.store, "record_transport", side_effect=fail_post_record):
+            first = executor.execute_reserved_candidate(self.store, wq, object())
+
+        self.assertFalse(first["ok"])
+        self.assertEqual(first["stage"], "POST_RECORD_EXCEPTION")
+        self.assertTrue(first["recovery_required"])
+        self.assertEqual(first["recover_location"], "/simulations/S-record-recovery")
+        self.assertEqual(self.store.read()["simulations"][self.fingerprint]["status"], "SUBMITTING")
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 0)
+
+        second = executor.execute_reserved_candidate(
+            self.store,
+            wq,
+            object(),
+            fingerprint=self.fingerprint,
+            recover_location=first["recover_location"],
+        )
+        self.assertTrue(second["ok"], second)
+        self.assertEqual(second["stage"], "PROMOTED")
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 1)
+
+    def test_done_without_alpha_id_is_repolled_without_repost(self):
+        wq = SequenceWQ(
+            [FakeResponse(201, location="/simulations/S-no-alpha")],
+            [
+                {"status": "done"},
+                {"status": "done", "alpha_id": "CHILD"},
+            ],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=2,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "PROMOTED")
+        self.assertEqual(result["continuations"], 1)
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 2)
+
+    def test_refuted_result_is_not_promoted(self):
+        class RefutedWQ(SequenceWQ):
+            def get_result(self, session, alpha_id):
+                result = super().get_result(session, alpha_id)
+                result["is"]["sharpe"] = 1.9
+                return result
+
+        wq = RefutedWQ(
+            [FakeResponse(201, location="/simulations/S-refuted")],
+            [{"status": "done", "alpha_id": "CHILD-REFUTED"}],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=1,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "RESULT_EVALUATED")
+        self.assertEqual(result["evaluation"]["status"], "REFUTED")
+        state = self.store.read()
+        self.assertEqual(state["incumbent"]["alpha_id"], "ROOT")
+        self.assertNotEqual(state["candidates"][self.fingerprint]["status"], "PROMOTED")
+
     def test_explicit_429_is_resumable_and_next_invocation_can_submit(self):
         wq = SequenceWQ(
             [
