@@ -1238,10 +1238,6 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
     return out
 
 
-def _check_status_map(checks: list[Dict[str, Any]]) -> Dict[str, str]:
-    return {str(c["name"]): str(c["status"]).upper() for c in checks}
-
-
 def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
     before_metrics = _normalize_metrics((before or {}).get("metrics"))
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
