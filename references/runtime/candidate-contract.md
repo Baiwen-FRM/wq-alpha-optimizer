@@ -294,7 +294,7 @@ Guard 必须验证：
 - frozen success/protection contract 所需 typed observations 已存在；
 - 为了比较 new blocker/unresolved，当前 snapshot 不得无故丢失 Incumbent 已存在的 check 名称；
 - success criteria 与 protected metrics 是否成立；
-- candidate 是否引入**新的** blocking check 或新的 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved，不应阻止 mechanism-level evaluation；candidate 新引入的未分类 WARNING、PENDING/UNKNOWN 等 unresolved 才使结果 `INCONCLUSIVE`。
+- candidate 是否引入**新的** blocking check 或 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved，不应阻止 mechanism-level evaluation。正常 executor 对“相对 Incumbent 新出现的 PENDING/UNKNOWN/RUNNING/PROCESSING”先做有界等待，不把瞬时平台状态立刻冻结成 `INCONCLUSIVE`；若仍无法稳定则进入 reconciliation boundary。稳定后仍存在的新 unresolved（例如未分类 WARNING）才由 Guard 记为 `INCONCLUSIVE`。
 
 `SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
 
