@@ -252,14 +252,14 @@ SUBMITTING → HTTP_429 --later reserve--> RESERVED
 SUBMITTING → AMBIGUOUS_POST
 SUBMITTING --explicit no-POST response--> RELEASED
 AMBIGUOUS_POST → POSTED(reconciled existing Location only)
-POSTED --Location resume only--> result / resumable polling
+POSTED --Location resume only--> result / internal bounded continuation
 ```
 
 `SUBMITTING` 是 crash-safety fence：它必须在调用外部 POST 之前写入 state。若进程在 POST 周围崩溃，下一次 executor 看到 `SUBMITTING` 时不得自动 POST；只有拿到已存在 simulation 的 Location 才能用 `--recover-location` 绑定为 `POSTED`。这宁可产生 reconciliation requirement，也不能冒 duplicate POST 风险。
 
 WQ Lab 已有 `_start_simulation` 只负责一次受控 submission 并立即返回 HTTP response/Location；Skill 不复制 BRAIN HTTP。201+Location 一旦返回，Guard 立即持久化 Location，然后后续全部通过 WQ Lab `simulate_single(..., location=...)` 续跑，因此 poll 异常、result/check 暂时不完整、controller 重启都不会重新提交。
 
-Safe continuation 属于 executor，不属于 controller。一次正常 `execute_reserved_candidate.py` invocation 在内部有界处理 429、poll/result 暂不可得和暂时不完整的 current snapshot；controller 不再接收“`resumable=true` 后请再调用一次”的工作流责任。只有得到 evaluated Result/promotion、明确 posted/pre-post inconclusive，或达到 `recovery_required` reconciliation boundary 时才把控制权交回上层。整个过程中同 fingerprint 不重新 POST。
+Safe continuation 属于 executor，不属于 controller。一次正常 `execute_reserved_candidate.py` invocation 在内部有界处理 429、poll/result 暂不可得和暂时不完整的 current snapshot；controller 不再接收中间 retry/poll 状态并负责再次调用的工作流责任。只有得到 evaluated Result/promotion、明确 posted/pre-post inconclusive，或达到 `recovery_required` reconciliation boundary 时才把控制权交回上层。整个过程中同 fingerprint 不重新 POST。
 
 显式 pre-POST 4xx 且没有 Location 时可以 release，并用 `TRANSPORT_FAILURE` evidence 把 hypothesis 记为 pre-POST `INCONCLUSIVE`。POST 已确认后若 simulation terminal error/cancelled 且没有可用 Alpha result，则用 `SIMULATION_FAILURE` 关闭为 `POSTED_SIMULATION_FAILURE / INCONCLUSIVE`。若一个旧版本已 POST 的 frozen hypothesis 在新 contract 检查下发现 observation type 与 Incumbent snapshot schema 不可能匹配，则保存当前真实 Result snapshot，用 `RESULT_CONTRACT_FAILURE` 关闭为 `POSTED_RESULT_CONTRACT_FAILURE / INCONCLUSIVE`；不得事后改写 hypothesis，也不得把这类确定性 schema mismatch 无限当作 pending。
 
