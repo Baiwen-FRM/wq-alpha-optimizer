@@ -194,53 +194,6 @@ def _existing_result_or_promotion(
     }
 
 
-def _required_contract_observations_missing(
-    store: guard.StateStore,
-    candidate: dict[str, Any],
-    evidence: dict[str, Any],
-) -> list[str]:
-    state = store.read()
-    hypothesis = (state.get("hypotheses") or {}).get(str(candidate.get("hypothesis_id") or "")) or {}
-    contract = hypothesis.get("contract") if isinstance(hypothesis.get("contract"), dict) else {}
-    missing = guard.hypothesis_observation_schema_missing(contract, evidence)
-
-    baseline_check_rows = {
-        str(row.get("name")): row
-        for row in ((state.get("incumbent") or {}).get("result_evidence", {}).get("checks") or [])
-        if isinstance(row, dict) and row.get("name")
-    }
-    baseline_checks = set(baseline_check_rows)
-    baseline_unresolved = guard._unresolved_checks(
-        guard._normalize_checks(list(baseline_check_rows.values()))
-    )
-    candidate_check_rows = {
-        str(row.get("name")): row
-        for row in (evidence.get("checks") or [])
-        if isinstance(row, dict) and row.get("name")
-    }
-    candidate_checks = set(candidate_check_rows)
-    missing.extend(f"check:{name}" for name in sorted(baseline_checks - candidate_checks))
-
-    # A transient check that was already unresolved on the Incumbent is a
-    # comparable current observation. A newly unresolved transient check is
-    # still changing platform state, so wait before freezing an INCONCLUSIVE
-    # evaluation that could become stale moments later.
-    for name, row in candidate_check_rows.items():
-        status = str(row.get("status") or "").upper()
-        if status in guard.TRANSIENT_CHECK_STATUSES and name not in baseline_unresolved:
-            missing.append(f"new_check_status:{name}")
-
-    for criterion in contract.get("success_criteria", []):
-        if not isinstance(criterion, dict) or criterion.get("type") != "check":
-            continue
-        name = str(criterion.get("name") or "")
-        row = candidate_check_rows.get(name)
-        status = str((row or {}).get("status") or "").upper()
-        if row is not None and status in guard.TRANSIENT_CHECK_STATUSES:
-            missing.append(f"check_status:{name}")
-    return sorted(set(missing))
-
-
 def _evaluate_done_alpha(
     store: guard.StateStore,
     wq: Any,
@@ -313,8 +266,10 @@ def _evaluate_done_alpha(
             "closure": closed,
         }
 
-    missing_contract_observations = _required_contract_observations_missing(
-        store, candidate, evidence
+    missing_contract_observations = guard.candidate_result_pending_observations(
+        contract,
+        (state.get("incumbent") or {}).get("result_evidence", {}),
+        evidence,
     )
     if not evidence.get("response_complete") or missing_contract_observations:
         return {
