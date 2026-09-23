@@ -98,6 +98,24 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(baseline["result_evidence"]["response_complete"])
         self.assertIn("get_submission_check", baseline["result_evidence"]["source"])
 
+    def test_explicit_empty_dedicated_check_list_does_not_fall_back_to_detail_checks(self):
+        root = {
+            "alpha_id": "A1",
+            "type": "REGULAR",
+            "expressions": ["rank(close)"],
+            "settings": {"region": "GBR", "delay": 0, "universe": "TOP700"},
+            "metrics": {"SHARPE": 2.0},
+            "fields": [{"field_id": "close"}],
+            "details_raw": {
+                "is": {"checks": [{"name": "STALE_DETAIL_CHECK", "result": "FAIL"}]}
+            },
+            "submission_check_raw": {"is": {"checks": []}},
+        }
+        baseline = provider._baseline_from_root(root)
+        self.assertTrue(baseline["result_evidence"]["response_complete"])
+        self.assertEqual(baseline["result_evidence"]["checks"], [])
+        self.assertIn("get_submission_check", baseline["result_evidence"]["source"])
+
     def test_missing_dedicated_submission_check_is_not_marked_complete(self):
         root = {
             "alpha_id": "A1",
