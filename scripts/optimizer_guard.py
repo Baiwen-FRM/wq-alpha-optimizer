@@ -348,6 +348,55 @@ def _normalize_metrics(metrics: Any) -> Dict[str, float]:
     return out
 
 
+def _numeric_check_value(row: Dict[str, Any] | None) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    value = row.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _check_row_map(checks: list[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {str(row["name"]): row for row in checks}
+
+
+def hypothesis_observation_schema_missing(
+    contract: Dict[str, Any],
+    result_evidence: Dict[str, Any],
+) -> list[str]:
+    """Return frozen observations that cannot be sourced from this snapshot schema."""
+    try:
+        metrics = _normalize_metrics((result_evidence or {}).get("metrics"))
+        checks = _normalize_checks((result_evidence or {}).get("checks"))
+    except ValueError:
+        return ["result_evidence:invalid"]
+    check_map = _check_row_map(checks)
+    missing: list[str] = []
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict):
+            continue
+        kind = str(criterion.get("type") or "")
+        name = str(criterion.get("name") or "")
+        if kind == "metric":
+            metric_name = name.upper()
+            if metric_name and metric_name not in metrics:
+                missing.append(f"metric:{metric_name}")
+        elif kind == "check":
+            if name and name not in check_map:
+                missing.append(f"check:{name}")
+        elif kind == "check_value":
+            if name and _numeric_check_value(check_map.get(name)) is None:
+                missing.append(f"check_value:{name}")
+    for policy in contract.get("protected_metrics", []):
+        if not isinstance(policy, dict):
+            continue
+        name = str(policy.get("name") or "").upper()
+        if name and name not in metrics:
+            missing.append(f"protected_metric:{name}")
+    return sorted(set(missing))
+
+
 def _fail_blockers(checks: list[Dict[str, Any]]) -> set[str]:
     return {str(c["name"]) for c in checks if bool(c.get("blocking")) or str(c.get("status", "")).upper() == "FAIL"}
 
@@ -972,23 +1021,25 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("hypothesis mutation must be expression or setting")
     if mutation.get("type") == "setting" and not _nonempty(mutation.get("key")):
         raise ValueError("setting hypothesis requires mutation.key")
+
     criteria = contract["success_criteria"]
     if not isinstance(criteria, list) or not criteria:
         raise ValueError("success_criteria must be a non-empty list")
     normalized_criteria = []
     for c in criteria:
-        if not isinstance(c, dict) or c.get("type") not in {"metric", "check"} or not _nonempty(c.get("name")):
-            raise ValueError("invalid success criterion")
+        if not isinstance(c, dict) or c.get("type") not in {"metric", "check", "check_value"} or not _nonempty(c.get("name")):
+            raise ValueError("success criterion type must be metric/check/check_value with a name")
         row = dict(c)
         row["type"] = str(row["type"]).lower()
         row["name"] = str(row["name"]).upper() if row["type"] == "metric" else str(row["name"])
-        if row["type"] == "metric":
+        if row["type"] in {"metric", "check_value"}:
             if row.get("direction") not in {"higher", "lower"}:
-                raise ValueError("metric criterion direction must be higher/lower")
+                raise ValueError(f"{row['type']} criterion direction must be higher/lower")
             min_change = row.get("min_change", 0.0)
             if isinstance(min_change, bool) or not isinstance(min_change, (int, float)) or float(min_change) < 0:
-                raise ValueError("metric criterion min_change must be non-negative")
+                raise ValueError(f"{row['type']} criterion min_change must be non-negative")
             row["min_change"] = float(min_change)
+            row.pop("required_status", None)
             row.pop("tolerance", None)
         else:
             if not _nonempty(row.get("required_status")):
@@ -996,6 +1047,8 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
             row["required_status"] = str(row["required_status"]).upper()
             if row["required_status"] != "PASS":
                 raise ValueError("check success criterion must require PASS")
+            row.pop("direction", None)
+            row.pop("min_change", None)
         normalized_criteria.append(row)
 
     protected = contract["protected_metrics"]
@@ -1189,30 +1242,56 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
     before_checks = _normalize_checks((before or {}).get("checks"))
     after_checks = _normalize_checks((after or {}).get("checks"))
-    after_check_map = _check_status_map(after_checks)
+    before_check_map = _check_row_map(before_checks)
+    after_check_map = _check_row_map(after_checks)
 
     criterion_results = []
     missing = []
     for c in contract.get("success_criteria", []):
-        if c["type"] == "metric":
-            name = c["name"]
+        kind = c["type"]
+        name = c["name"]
+        if kind == "metric":
             if name not in before_metrics or name not in after_metrics:
                 missing.append(f"metric:{name}")
                 continue
             b, a, min_change = before_metrics[name], after_metrics[name], float(c.get("min_change", 0.0))
             delta = a - b
-            if c["direction"] == "higher":
-                passed = delta > 0 if min_change == 0 else delta >= min_change
-            else:
-                passed = delta < 0 if min_change == 0 else -delta >= min_change
+            passed = delta > 0 if c["direction"] == "higher" and min_change == 0 else (
+                delta >= min_change if c["direction"] == "higher" else (
+                    delta < 0 if min_change == 0 else -delta >= min_change
+                )
+            )
             criterion_results.append({"criterion": c, "before": b, "after": a, "delta": delta, "passed": passed})
-        else:
-            name = c["name"]
-            if name not in after_check_map:
+        elif kind == "check":
+            row = after_check_map.get(str(name))
+            if row is None:
                 missing.append(f"check:{name}")
                 continue
-            passed = after_check_map[name] == c["required_status"]
-            criterion_results.append({"criterion": c, "after": after_check_map[name], "passed": passed})
+            status = str(row.get("status") or "").upper()
+            passed = status == c["required_status"]
+            criterion_results.append({"criterion": c, "after": status, "passed": passed})
+        else:
+            before_value = _numeric_check_value(before_check_map.get(str(name)))
+            after_value = _numeric_check_value(after_check_map.get(str(name)))
+            if before_value is None or after_value is None:
+                missing.append(f"check_value:{name}")
+                continue
+            min_change = float(c.get("min_change", 0.0))
+            delta = after_value - before_value
+            passed = delta > 0 if c["direction"] == "higher" and min_change == 0 else (
+                delta >= min_change if c["direction"] == "higher" else (
+                    delta < 0 if min_change == 0 else -delta >= min_change
+                )
+            )
+            criterion_results.append(
+                {
+                    "criterion": c,
+                    "before": before_value,
+                    "after": after_value,
+                    "delta": delta,
+                    "passed": passed,
+                }
+            )
 
     protected_results = []
     for p in contract.get("protected_metrics", []):
@@ -1224,8 +1303,8 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         passed = a >= b - tol if p["rule"] == "not_lower" else a <= b + tol
         protected_results.append({"policy": p, "before": b, "after": a, "passed": passed})
 
-    before_check_names = {str(row["name"]) for row in before_checks}
-    after_check_names = {str(row["name"]) for row in after_checks}
+    before_check_names = set(before_check_map)
+    after_check_names = set(after_check_map)
     missing_prior_checks = before_check_names - after_check_names
     missing.extend(f"check:{name}" for name in sorted(missing_prior_checks))
 
@@ -2161,6 +2240,16 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing_refs}
         if not (set(normalized["evidence_refs"]) & set(focus.get("evidence_refs", []))):
             return {"ok": False, "reason": "HYPOTHESIS_NOT_GROUNDED_IN_FOCUS_EVIDENCE"}
+        observation_missing = hypothesis_observation_schema_missing(
+            normalized,
+            (state.get("incumbent") or {}).get("result_evidence", {}),
+        )
+        if observation_missing:
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
+                "missing": observation_missing,
+            }
         if state.get("planning_contract") in {"v1", "v2"} and normalized["target"] != focus.get("target"):
             return {"ok": False, "reason": "HYPOTHESIS_TARGET_MISMATCH", "focus_target": focus.get("target"), "hypothesis_target": normalized["target"]}
         if state.get("planning_contract") in {"v1", "v2"}:
