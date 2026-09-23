@@ -15,6 +15,7 @@ import copy
 import io
 import json
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ import wq_lab_provider as provider
 
 RESUMABLE_TRANSPORT = {"RESERVED", "HTTP_429", "POSTED"}
 RECOVERY_TRANSPORT = {"SUBMITTING", "AMBIGUOUS_POST"}
+MAX_INTERNAL_CONTINUATIONS = 8
+CONTINUATION_SLEEP_SECONDS = 2.0
 
 
 def _now_iso() -> str:
@@ -112,7 +115,7 @@ def _response_summary(response: Any) -> dict[str, Any]:
     return {"http_status": status, "location": location, "body": body}
 
 
-def _transport_evidence(
+def _failure_evidence(
     store: guard.StateStore,
     fingerprint: str,
     hypothesis_id: str,
@@ -121,7 +124,12 @@ def _transport_evidence(
     source: str,
     claim: str,
 ) -> str:
-    prefix = "E_SIM_FAIL" if kind == "SIMULATION_FAILURE" else "E_TRANSPORT_FAIL"
+    prefixes = {
+        "SIMULATION_FAILURE": "E_SIM_FAIL",
+        "TRANSPORT_FAILURE": "E_TRANSPORT_FAIL",
+        "RESULT_CONTRACT_FAILURE": "E_RESULT_CONTRACT_FAIL",
+    }
+    prefix = prefixes.get(kind, "E_FAILURE")
     evidence_id = f"{prefix}_{fingerprint[:16]}"
     record = {
         "id": evidence_id,
@@ -194,30 +202,19 @@ def _required_contract_observations_missing(
     state = store.read()
     hypothesis = (state.get("hypotheses") or {}).get(str(candidate.get("hypothesis_id") or "")) or {}
     contract = hypothesis.get("contract") if isinstance(hypothesis.get("contract"), dict) else {}
-    metric_names = {str(name).upper() for name in (evidence.get("metrics") or {})}
-    check_names = {
+    missing = guard.hypothesis_observation_schema_missing(contract, evidence)
+
+    baseline_checks = {
+        str(row.get("name"))
+        for row in ((state.get("incumbent") or {}).get("result_evidence", {}).get("checks") or [])
+        if isinstance(row, dict) and row.get("name")
+    }
+    candidate_checks = {
         str(row.get("name"))
         for row in (evidence.get("checks") or [])
         if isinstance(row, dict) and row.get("name")
     }
-    missing: list[str] = []
-    for criterion in contract.get("success_criteria", []):
-        if not isinstance(criterion, dict):
-            continue
-        if criterion.get("type") == "metric":
-            name = str(criterion.get("name") or "").upper()
-            if name and name not in metric_names:
-                missing.append(f"metric:{name}")
-        elif criterion.get("type") == "check":
-            name = str(criterion.get("name") or "")
-            if name and name not in check_names:
-                missing.append(f"check:{name}")
-    for policy in contract.get("protected_metrics", []):
-        if not isinstance(policy, dict):
-            continue
-        name = str(policy.get("name") or "").upper()
-        if name and name not in metric_names:
-            missing.append(f"protected_metric:{name}")
+    missing.extend(f"check:{name}" for name in sorted(baseline_checks - candidate_checks))
     return sorted(set(missing))
 
 
@@ -230,8 +227,54 @@ def _evaluate_done_alpha(
     alpha_id: str,
     simulation_id: str,
 ) -> dict[str, Any]:
-    evidence = provider.result_evidence_snapshot(session, wq, alpha_id, simulation_id)
+    try:
+        evidence = provider.result_evidence_snapshot(session, wq, alpha_id, simulation_id)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "stage": "RESULT_FETCH_EXCEPTION",
+            "fingerprint": fingerprint,
+            "alpha_id": alpha_id,
+            "simulation_id": simulation_id,
+            "error": str(exc),
+            "resumable": True,
+        }
     _persist(store, fingerprint, "result_evidence.json", evidence)
+
+    state = store.read()
+    hypothesis_id = str(candidate.get("hypothesis_id") or "")
+    hypothesis = (state.get("hypotheses") or {}).get(hypothesis_id) or {}
+    contract = hypothesis.get("contract") if isinstance(hypothesis.get("contract"), dict) else {}
+    baseline_schema_missing = guard.hypothesis_observation_schema_missing(
+        contract,
+        (state.get("incumbent") or {}).get("result_evidence", {}),
+    )
+    if baseline_schema_missing:
+        reason = (
+            "Frozen hypothesis references observations that are not present in the "
+            f"Incumbent snapshot schema: {', '.join(baseline_schema_missing)}. "
+            "The posted hypothesis cannot be rewritten after seeing Result."
+        )
+        evidence_ref = _failure_evidence(
+            store,
+            fingerprint,
+            hypothesis_id,
+            kind="RESULT_CONTRACT_FAILURE",
+            source="optimizer_guard:hypothesis_observation_schema_missing",
+            claim=reason,
+        )
+        closed = store.close_posted_hypothesis(hypothesis_id, evidence_ref, reason)
+        return {
+            "ok": bool(closed.get("ok")),
+            "stage": "POSTED_RESULT_CONTRACT_INCONCLUSIVE",
+            "fingerprint": fingerprint,
+            "alpha_id": alpha_id,
+            "simulation_id": simulation_id,
+            "missing_baseline_observations": baseline_schema_missing,
+            "result_evidence": evidence,
+            "closure": closed,
+        }
+
     missing_contract_observations = _required_contract_observations_missing(
         store, candidate, evidence
     )
@@ -338,7 +381,7 @@ def _poll_posted(
             f"POSTED simulation terminated without usable Alpha result: status={status}; "
             f"error={str(outcome.get('error') or '')[:500]}"
         )
-        evidence_ref = _transport_evidence(
+        evidence_ref = _failure_evidence(
             store,
             fingerprint,
             hypothesis_id,
@@ -346,7 +389,7 @@ def _poll_posted(
             source="BRAIN:wq_lib.simulate_single",
             claim=claim,
         )
-        failed = store.fail_posted_hypothesis(hypothesis_id, evidence_ref, claim)
+        failed = store.close_posted_hypothesis(hypothesis_id, evidence_ref, claim)
         return {
             "ok": bool(failed.get("ok")),
             "stage": "POSTED_SIMULATION_INCONCLUSIVE",
@@ -399,12 +442,24 @@ def _submit_reserved(
         }
 
     summary = _response_summary(response)
-    _persist(store, fingerprint, "submission_response.json", summary)
     http_status = summary["http_status"]
     location = str(summary["location"] or "")
 
     if http_status == 201 and location:
-        posted = store.record_transport(fingerprint, "POSTED", location)
+        try:
+            posted = store.record_transport(fingerprint, "POSTED", location)
+        except Exception as exc:
+            _persist(store, fingerprint, "submission_response.json", summary)
+            return {
+                "ok": False,
+                "stage": "POST_RECORD_EXCEPTION",
+                "fingerprint": fingerprint,
+                "submission": summary,
+                "error": str(exc),
+                "recovery_required": True,
+                "recover_location": location,
+            }
+        _persist(store, fingerprint, "submission_response.json", summary)
         if not posted.get("ok"):
             return {
                 "ok": False,
@@ -413,11 +468,13 @@ def _submit_reserved(
                 "submission": summary,
                 "guard": posted,
                 "recovery_required": True,
+                "recover_location": location,
             }
         return _poll_posted(store, wq, session, fingerprint, candidate)
 
     if http_status == 429:
         limited = store.record_transport(fingerprint, "HTTP_429")
+        _persist(store, fingerprint, "submission_response.json", summary)
         return {
             "ok": False,
             "stage": "HTTP_429",
@@ -429,6 +486,7 @@ def _submit_reserved(
 
     if http_status == 201 or (isinstance(http_status, int) and http_status >= 500):
         ambiguous = store.record_transport(fingerprint, "AMBIGUOUS_POST")
+        _persist(store, fingerprint, "submission_response.json", summary)
         return {
             "ok": False,
             "stage": "AMBIGUOUS_POST",
@@ -443,8 +501,9 @@ def _submit_reserved(
         f"HTTP {http_status}; body={summary['body'][:500]}"
     )
     released = store.release_reservation(fingerprint, reason)
+    _persist(store, fingerprint, "submission_response.json", summary)
     hypothesis_id = str(candidate.get("hypothesis_id") or "")
-    evidence_ref = _transport_evidence(
+    evidence_ref = _failure_evidence(
         store,
         fingerprint,
         hypothesis_id,
@@ -542,6 +601,51 @@ def execute_reserved_candidate(
     }
 
 
+def execute_until_boundary(
+    store: guard.StateStore,
+    wq: Any,
+    session: Any,
+    *,
+    fingerprint: str | None = None,
+    recover_location: str | None = None,
+    max_continuations: int = MAX_INTERNAL_CONTINUATIONS,
+    sleep_seconds: float = CONTINUATION_SLEEP_SECONDS,
+) -> dict[str, Any]:
+    """Own all safe continuation for one candidate until a real decision boundary."""
+    result = execute_reserved_candidate(
+        store,
+        wq,
+        session,
+        fingerprint=fingerprint,
+        recover_location=recover_location,
+    )
+    continuations = 0
+    while result.get("resumable"):
+        if continuations >= max_continuations:
+            return {
+                "ok": False,
+                "stage": "CONTINUATION_RECONCILIATION_REQUIRED",
+                "fingerprint": result.get("fingerprint") or fingerprint,
+                "last_stage": result.get("stage"),
+                "last_result": result,
+                "continuations": continuations,
+                "recovery_required": True,
+            }
+        continuations += 1
+        if sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+        result = execute_reserved_candidate(
+            store,
+            wq,
+            session,
+            fingerprint=str(result.get("fingerprint") or fingerprint or ""),
+        )
+    if isinstance(result, dict):
+        result = dict(result)
+        result["continuations"] = continuations
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Execute one Guard-reserved candidate through WQ Lab without duplicate POST."
@@ -560,7 +664,7 @@ def main() -> int:
     with contextlib.redirect_stdout(io.StringIO()):
         session = wq.login()
 
-    result = execute_reserved_candidate(
+    result = execute_until_boundary(
         store,
         wq,
         session,
@@ -568,10 +672,7 @@ def main() -> int:
         recover_location=args.recover_location,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    # A resumable state is a successful, side-effect-safe executor outcome, not
-    # a shell failure. The controller may invoke the executor again in the same
-    # optimize run without reposting.
-    return 0 if result.get("ok") or result.get("resumable") else 2
+    return 0 if result.get("ok") else 2
 
 
 if __name__ == "__main__":
