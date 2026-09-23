@@ -116,11 +116,11 @@ ENHANCEMENT 不是无限优化许可，也不能用来绕过已有 FAIL blocker�
 
 若 candidate 引入或改变 operator family、GROUP/VECTOR 参数角色、named argument 或其它可能受 live signature 影响的结构，在 reserve/POST 前用当前 `get_operators()` 定义核对名称、arity/type/NaN 语义，并把能驱动决定的结论注册为 evidence。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
 
-Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。
+Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。Hypothesis freeze 时必须通过 typed observation schema 校验：普通 Result 数值用 `metric`，submission-check 状态用 `check`，check row 的数值用 `check_value`；类型不匹配在 transport 前拒绝，不留给 Result 阶段补救。
 
 ## Stage F — RESULT → CLOSEOUT
 
-Simulation 后先登记 raw Result/check evidence，再由 guard 按 `candidate-contract.md` 计算 hypothesis 状态。需要重新读取当前 Incumbent 的 fresh Result/checks（例如 promotion 后、终检前或平台状态更新后）时，使用 `refresh-incumbent`；任何用于新 plan 的 fresh facts 仍要另外注册 evidence refs。Controller 只根据 machine status 继续：
+Simulation/Result transport 由 `execute_reserved_candidate.py` 一次调用有界执行到 machine decision 或明确 reconciliation boundary；controller 不负责反复调用 executor 来完成 poll/result wait。拿到 current raw Result/check snapshot 后由 guard 按 `candidate-contract.md` 计算 hypothesis 状态。需要重新读取当前 Incumbent 的 fresh Result/checks（例如 promotion 后、终检前或平台状态更新后）时，使用 `refresh-incumbent`；任何用于新 plan 的 fresh facts 仍要另外注册 evidence refs。Controller 只根据最终 machine status 继续：
 
 - `SUPPORTED`：尝试 promotion。这里的 supported 是**mechanism-level research progress**，不要求最终 blocker 已 PASS；promotion 后把 candidate 作为新的 Incumbent，旧 plan STALE，回到 fresh diagnosis/routing。若 blocker 仍存在，只能基于新 Incumbent 的新事实提出下一步，不得机械扫描相邻参数。
 - `REFUTED`：淘汰当前 frozen hypothesis/payload；不要自动把整个 mechanism family 标为 exhausted。只有该 mechanism 下已没有不同、未解决且 evidence-supported 的 falsifiable question 时才关闭 route。
