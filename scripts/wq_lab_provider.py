@@ -102,6 +102,11 @@ def _detail_checks(details: dict) -> list[dict]:
     return checks if isinstance(checks, list) else []
 
 
+def _dedicated_check_snapshot_present(payload: dict) -> bool:
+    values = payload.get("is") if isinstance(payload, dict) and isinstance(payload.get("is"), dict) else payload
+    return isinstance(values, dict) and isinstance(values.get("checks"), list)
+
+
 def _guard_checks(payload: dict) -> list[dict]:
     values = payload.get("is") if isinstance(payload, dict) and isinstance(payload.get("is"), dict) else payload
     checks = values.get("checks") if isinstance(values, dict) else None
@@ -146,7 +151,9 @@ def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> 
     # is structurally present. A PENDING/UNKNOWN check is still a real current
     # observation; readiness policy is handled by Guard rather than hidden in
     # the provider.
-    checks_present = bool(dedicated_checks)
+    checks_present = _dedicated_check_snapshot_present(
+        dedicated_payload if isinstance(dedicated_payload, dict) else {}
+    )
     return {
         "alpha_id": alpha_id,
         "simulation_id": simulation_id,
@@ -172,7 +179,7 @@ def _baseline_from_root(root: dict) -> dict:
     dedicated_checks = _guard_checks(dedicated_check_payload)
     fallback_checks = _guard_checks(details)
     checks = dedicated_checks or fallback_checks
-    dedicated_complete = bool(dedicated_checks)
+    dedicated_complete = _dedicated_check_snapshot_present(dedicated_check_payload)
     source = (
         "BRAIN:wq_lib.get_result+get_submission_check"
         if dedicated_complete
