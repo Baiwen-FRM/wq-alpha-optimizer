@@ -515,7 +515,7 @@ def _submit_reserved(
     }
 
 
-def execute_reserved_candidate(
+def _execute_once(
     store: guard.StateStore,
     wq: Any,
     session: Any,
@@ -594,7 +594,7 @@ def execute_reserved_candidate(
     }
 
 
-def execute_until_boundary(
+def execute_reserved_candidate(
     store: guard.StateStore,
     wq: Any,
     session: Any,
@@ -605,7 +605,7 @@ def execute_until_boundary(
     sleep_seconds: float = CONTINUATION_SLEEP_SECONDS,
 ) -> dict[str, Any]:
     """Own all safe continuation for one candidate until a real decision boundary."""
-    result = execute_reserved_candidate(
+    result = _execute_once(
         store,
         wq,
         session,
@@ -627,7 +627,7 @@ def execute_until_boundary(
         continuations += 1
         if sleep_seconds > 0:
             time.sleep(sleep_seconds)
-        result = execute_reserved_candidate(
+        result = _execute_once(
             store,
             wq,
             session,
@@ -657,7 +657,7 @@ def main() -> int:
     with contextlib.redirect_stdout(io.StringIO()):
         session = wq.login()
 
-    result = execute_until_boundary(
+    result = execute_reserved_candidate(
         store,
         wq,
         session,
