@@ -204,6 +204,13 @@ class CoreGuardTests(TestCase):
         self.assertTrue(result["ok"], result)
         return result
 
+    def _post(self, store, fingerprint, simulation_id):
+        begun = store.begin_submission(fingerprint)
+        self.assertTrue(begun["ok"], begun)
+        posted = store.record_transport(fingerprint, "POSTED", simulation_id)
+        self.assertTrue(posted["ok"], posted)
+        return posted
+
     def _candidate(self, *, expression="rank(-close)", fields=None, settings=None, hypothesis_id="H1", parent_id=None):
         state = self.store.read()
         return {
@@ -398,6 +405,8 @@ class CoreGuardTests(TestCase):
         self.assertTrue(first["allowed"], first)
         fp = first["fingerprint"]
         for retry in range(1, guard.MAX_EXPLICIT_429_RETRIES + 1):
+            begun = self.store.begin_submission(fp)
+            self.assertTrue(begun["ok"], begun)
             recorded = self.store.record_transport(fp, "HTTP_429")
             self.assertTrue(recorded["ok"], recorded)
             self.assertEqual(recorded["retry_count"], retry)
@@ -415,7 +424,7 @@ class CoreGuardTests(TestCase):
         candidate = self._candidate()
         reserved = self.store.reserve_simulation(candidate)
         fp = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-STALE")["ok"])
+        self._post(self.store, fp, "SIM-STALE")
         result = self.store.evaluate_result(
             candidate,
             {
@@ -438,7 +447,7 @@ class CoreGuardTests(TestCase):
         candidate = self._candidate()
         reserved = self.store.reserve_simulation(candidate)
         fp = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-INCONCLUSIVE")["ok"])
+        self._post(self.store, fp, "SIM-INCONCLUSIVE")
         result = self.store.evaluate_result(
             candidate,
             {
@@ -601,7 +610,7 @@ class CoreGuardTests(TestCase):
         candidate = self._candidate()
         reserved = self.store.reserve_simulation(candidate)
         fp = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-WARNING")["ok"])
+        self._post(self.store, fp, "SIM-WARNING")
         result = self.store.evaluate_result(
             candidate,
             {
@@ -681,7 +690,7 @@ class CoreGuardTests(TestCase):
         reserved = store.reserve_simulation(candidate)
         self.assertTrue(reserved["allowed"], reserved)
         fp = reserved["fingerprint"]
-        self.assertTrue(store.record_transport(fp, "POSTED", "SIM-CHECK-VALUE")["ok"])
+        self._post(store, fp, "SIM-CHECK-VALUE")
         result = store.evaluate_result(
             candidate,
             {
@@ -712,7 +721,7 @@ class CoreGuardTests(TestCase):
         candidate = self._candidate()
         reserved = self.store.reserve_simulation(candidate)
         fp = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-PROGRESS")["ok"])
+        self._post(self.store, fp, "SIM-PROGRESS")
         result = self.store.evaluate_result(
             candidate,
             {
@@ -744,7 +753,7 @@ class CoreGuardTests(TestCase):
         candidate = self._candidate()
         reserved = self.store.reserve_simulation(candidate)
         fp = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fp, "POSTED", "SIM-REFUTED")["ok"])
+        self._post(self.store, fp, "SIM-REFUTED")
         result = self.store.evaluate_result(
             candidate,
             {
