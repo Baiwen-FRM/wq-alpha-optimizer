@@ -82,7 +82,7 @@ python3 scripts/execute_reserved_candidate.py \
   --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The executor finds the unique active reserved candidate when no fingerprint is supplied. It persists candidate payload/submission/result artifacts under `logs/.data/<run_id>/candidates/<fingerprint>/`, uses WQ Lab for submission/poll/result/check reads, and uses Guard for every state transition/evaluation/promotion. One invocation owns bounded safe continuation until an evaluated/terminal/reconciliation boundary; a normal controller does not loop on intermediate resumable returns. A rerun of a POSTED candidate resumes the stored Location; a rerun of a promoted/evaluated candidate is idempotent.
+The executor finds the unique active reserved candidate when no fingerprint is supplied. It persists candidate payload/submission/result artifacts under `logs/.data/<run_id>/candidates/<fingerprint>/`, uses WQ Lab for submission/poll/result/check reads, and uses Guard for every state transition/evaluation/promotion. One invocation owns bounded safe continuation until an evaluated/terminal/reconciliation boundary; intermediate retry states remain executor-internal and are not a controller workflow. A rerun of a POSTED candidate resumes the stored Location; a rerun of a promoted/evaluated candidate is idempotent.
 
 For Result evidence, `response_complete` means that the current dedicated check snapshot is structurally present, not that every check is terminal. `PENDING/UNKNOWN` rows are preserved as current observations and Guard decides whether they are old unresolved checks, newly introduced unresolved checks, or submission-readiness blockers. This keeps research evaluation separate from final submission readiness.
 
