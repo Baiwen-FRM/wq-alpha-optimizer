@@ -429,6 +429,44 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertIn("LOW_SHARPE", state["evidence"][evidence_ref]["claim"])
         self.assertNotIn("result_evaluation", state["candidates"][self.fingerprint])
 
+    def test_new_transient_check_is_waited_out_before_evaluation(self):
+        class ResolvingNewCheckWQ(SequenceWQ):
+            def __init__(self, submissions, polls):
+                super().__init__(submissions, polls)
+                self.check_calls = 0
+
+            def get_submission_check(self, session, alpha_id):
+                self.check_calls += 1
+                status = "PENDING" if self.check_calls == 1 else "PASS"
+                return {
+                    "is": {
+                        "checks": [
+                            {"name": "LOW_SHARPE", "result": "FAIL", "value": 2.2, "limit": 2.69},
+                            {"name": "NEW_CHECK", "result": status},
+                        ]
+                    }
+                }
+
+        wq = ResolvingNewCheckWQ(
+            [FakeResponse(201, location="/simulations/S-new-pending")],
+            [
+                {"status": "done", "alpha_id": "CHILD"},
+                {"status": "done", "alpha_id": "CHILD"},
+            ],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=2,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "PROMOTED")
+        self.assertEqual(result["continuations"], 1)
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 2)
+
     def test_result_fetch_exception_is_retried_by_executor(self):
         class TransientResultWQ(SequenceWQ):
             def __init__(self, submissions, polls):
