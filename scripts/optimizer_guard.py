@@ -2293,16 +2293,6 @@ class StateStore:
                     "focus_mechanism": focus.get("mechanism"),
                     "hypothesis_mechanism": normalized.get("mechanism"),
                 }
-        observation_missing = hypothesis_observation_schema_missing(
-            normalized,
-            (state.get("incumbent") or {}).get("result_evidence", {}),
-        )
-        if observation_missing:
-            return {
-                "ok": False,
-                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
-                "missing": observation_missing,
-            }
         old = state["hypotheses"].get(hypothesis_id)
         if old:
             if old.get("status") == "OPEN" and _canonical_json(old.get("contract")) == _canonical_json(normalized):
@@ -2314,6 +2304,16 @@ class StateStore:
         ]
         if other_open:
             return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": sorted(other_open)}
+        observation_missing = hypothesis_observation_schema_missing(
+            normalized,
+            (state.get("incumbent") or {}).get("result_evidence", {}),
+        )
+        if observation_missing:
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
+                "missing": observation_missing,
+            }
         state["hypotheses"][hypothesis_id] = {
             "contract": normalized,
             "status": "OPEN",
