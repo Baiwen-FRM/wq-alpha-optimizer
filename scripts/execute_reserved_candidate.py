@@ -209,12 +209,22 @@ def _required_contract_observations_missing(
         for row in ((state.get("incumbent") or {}).get("result_evidence", {}).get("checks") or [])
         if isinstance(row, dict) and row.get("name")
     }
-    candidate_checks = {
-        str(row.get("name"))
+    candidate_check_rows = {
+        str(row.get("name")): row
         for row in (evidence.get("checks") or [])
         if isinstance(row, dict) and row.get("name")
     }
+    candidate_checks = set(candidate_check_rows)
     missing.extend(f"check:{name}" for name in sorted(baseline_checks - candidate_checks))
+
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict) or criterion.get("type") != "check":
+            continue
+        name = str(criterion.get("name") or "")
+        row = candidate_check_rows.get(name)
+        status = str((row or {}).get("status") or "").upper()
+        if row is not None and status in guard.TRANSIENT_CHECK_STATUSES:
+            missing.append(f"check_status:{name}")
     return sorted(set(missing))
 
 
