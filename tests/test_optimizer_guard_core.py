@@ -630,6 +630,81 @@ class CoreGuardTests(TestCase):
         self.assertTrue(forced["ok"], forced)
 
 
+    def test_hypothesis_rejects_check_value_mislabeled_as_metric(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        contract = self._contract()
+        contract["success_criteria"] = [
+            {"type": "metric", "name": "LOW_SHARPE", "direction": "higher", "min_change": 0.01}
+        ]
+        opened = self.store.open_hypothesis("H_BAD_SCHEMA", contract)
+        self.assertFalse(opened["ok"], opened)
+        self.assertEqual(opened["reason"], "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH")
+        self.assertIn("metric:LOW_SHARPE", opened["missing"])
+
+    def test_check_value_progress_can_support_with_same_fail_and_pending_checks(self):
+        store = guard.StateStore(Path(self.tempdir.name) / "check-value.json", "CHECKVALUE")
+        self._initialize(
+            store,
+            checks=[
+                {"name": "LOW_SHARPE", "status": "FAIL", "value": 0.88, "limit": 0.99},
+                {"name": "SELF_CORRELATION", "status": "PENDING"},
+                {"name": "PROD_CORRELATION", "status": "PENDING"},
+            ],
+        )
+        self._register(
+            store,
+            "E1",
+            "DIAGNOSTIC",
+            "LOW_SHARPE",
+            "BRAIN:test",
+            "Current LOW_SHARPE check value supports one directional robustness probe.",
+        )
+        self.assertTrue(self._set_plan(store)["ok"])
+        self._open_focus(store)
+        contract = self._contract()
+        contract["success_criteria"] = [
+            {"type": "check_value", "name": "LOW_SHARPE", "direction": "higher", "min_change": 0.01}
+        ]
+        opened = store.open_hypothesis("H_CHECK_VALUE", contract)
+        self.assertTrue(opened["ok"], opened)
+
+        state = store.read()
+        candidate = {
+            "parent_id": state["incumbent"]["alpha_id"],
+            "hypothesis_id": "H_CHECK_VALUE",
+            "expression": "rank(-close)",
+            "fields": ["close"],
+            "settings": state["incumbent"]["settings"],
+            "language": "FASTEXPR",
+        }
+        reserved = store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fp = reserved["fingerprint"]
+        self.assertTrue(store.record_transport(fp, "POSTED", "SIM-CHECK-VALUE")["ok"])
+        result = store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-CHECK-VALUE",
+                "simulation_id": "SIM-CHECK-VALUE",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:get_submission_check",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.1, "FITNESS": 1.55, "TURNOVER": 0.2},
+                "checks": [
+                    {"name": "LOW_SHARPE", "status": "FAIL", "value": 0.90, "limit": 0.99},
+                    {"name": "SELF_CORRELATION", "status": "PENDING"},
+                    {"name": "PROD_CORRELATION", "status": "PENDING"},
+                ],
+            },
+        )
+        self.assertEqual(result["status"], "SUPPORTED", result)
+        criterion = result["evaluation"]["criterion_results"][0]
+        self.assertAlmostEqual(criterion["delta"], 0.02)
+        self.assertTrue(criterion["passed"])
+        self.assertEqual(result["evaluation"]["new_unresolved_checks"], [])
+
     def test_directional_improvement_can_promote_while_target_check_still_fails(self):
         self.assertTrue(self._set_plan()["ok"])
         self._open_focus()
