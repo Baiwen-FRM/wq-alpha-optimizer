@@ -423,6 +423,10 @@ class ReservedCandidateExecutorTests(TestCase):
             state["hypotheses"]["H1"]["result"]["disposition"],
             "POSTED_RESULT_CONTRACT_FAILURE",
         )
+        evidence_ref = state["hypotheses"]["H1"]["result"]["evidence_ref"]
+        self.assertEqual(state["evidence"][evidence_ref]["kind"], "RESULT_CONTRACT_FAILURE")
+        self.assertIn("CHILD-LEGACY", state["evidence"][evidence_ref]["claim"])
+        self.assertIn("LOW_SHARPE", state["evidence"][evidence_ref]["claim"])
         self.assertNotIn("result_evaluation", state["candidates"][self.fingerprint])
 
     def test_result_fetch_exception_is_retried_by_executor(self):
