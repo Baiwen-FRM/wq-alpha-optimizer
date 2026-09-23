@@ -429,6 +429,17 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertIn("LOW_SHARPE", state["evidence"][evidence_ref]["claim"])
         self.assertNotIn("result_evaluation", state["candidates"][self.fingerprint])
 
+        exhausted = self.store.exhaust_focus(
+            "The posted legacy hypothesis cannot be evaluated under its frozen observation schema.",
+            evidence_ref,
+        )
+        self.assertTrue(exhausted["ok"], exhausted)
+        self.assertTrue(exhausted["final_replan_required"], exhausted)
+        self.assertEqual(
+            self.store.read()["optimization_plan"]["routes"][0]["status"],
+            "EXHAUSTED",
+        )
+
     def test_new_transient_check_is_waited_out_before_evaluation(self):
         class ResolvingNewCheckWQ(SequenceWQ):
             def __init__(self, submissions, polls):
