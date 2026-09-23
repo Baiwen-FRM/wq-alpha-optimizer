@@ -193,12 +193,15 @@ Simulation 前先冻结。同一 focus 同时只允许一个 `OPEN` hypothesis�
 }
 ```
 
-Success criterion 允许：
+Success criterion 只有三种 observation type：
 
-- metric：`higher / lower`；
-- check：success criterion 只允许要求 current check 达到 `PASS`；不能把继续 FAIL 预声明成“成功”。
+- `metric`：读取 Result `metrics` 中的数值，声明 `higher / lower + min_change`；
+- `check`：读取 submission check 的 `status`，success criterion 只允许要求 `PASS`；
+- `check_value`：读取指定 submission check row 的数值 `value`，声明 `higher / lower + min_change`。它用于诸如 sub-universe Sharpe 这类“平台把数值放在 check row，而不是普通 Result metrics”的方向性预测。
 
-metric success criterion 的 `min_change` 与 protected metric 的 `tolerance` 都必须在 simulation 前声明；不能看完结果后补。需要 field change 或 complexity growth 时，理由也必须在 hypothesis contract 中预声明。
+Guard 在 hypothesis freeze 时就验证 observation schema：`metric` 名称必须真实存在于当前 Incumbent metrics；`check` 名称必须存在于当前 Incumbent checks；`check_value` 必须存在同名 check 且其 `value` 为 numeric；protected metric 也必须真实存在。类型不匹配直接返回 `HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH`，不得 reserve/POST。这样不能把 check.value 冒充 metric，也不能等看完 Result 后再改 criterion 类型。
+
+`metric/check_value` 的 `min_change` 与 protected metric 的 `tolerance` 都必须在 simulation 前声明；不能看完结果后补。需要 field change 或 complexity growth 时，理由也必须在 hypothesis contract 中预声明。
 
 ### Preflight correction before reservation
 
@@ -256,11 +259,9 @@ POSTED --Location resume only--> result / resumable polling
 
 WQ Lab 已有 `_start_simulation` 只负责一次受控 submission 并立即返回 HTTP response/Location；Skill 不复制 BRAIN HTTP。201+Location 一旦返回，Guard 立即持久化 Location，然后后续全部通过 WQ Lab `simulate_single(..., location=...)` 续跑，因此 poll 异常、result/check 暂时不完整、controller 重启都不会重新提交。
 
-Executor 返回 `resumable=true` 表示 transport/result 仍可安全续跑，而不是 candidate 失败。正常 optimize invocation 应继续调用同一 executor，直到得到 evaluated Result、promotion、明确 terminal simulation failure，或进入需要 reconciliation 的 `SUBMITTING/AMBIGUOUS_POST`。CLI 对 resumable state 返回成功退出码，避免上层把安全等待误判成 workflow crash。
+Safe continuation 属于 executor，不属于 controller。一次正常 `execute_reserved_candidate.py` invocation 在内部有界处理 429、poll/result 暂不可得和暂时不完整的 current snapshot；controller 不再接收“`resumable=true` 后请再调用一次”的工作流责任。只有得到 evaluated Result/promotion、明确 posted/pre-post inconclusive，或达到 `recovery_required` reconciliation boundary 时才把控制权交回上层。整个过程中同 fingerprint 不重新 POST。
 
-旧 controller 直接在 RESERVED 后记录 `POSTED/HTTP_429/AMBIGUOUS_POST` 的 bookkeeping transition 为兼容保留，但正常 Skill execution 不使用该捷径。
-
-显式 pre-POST 4xx 且没有 Location 时可以 release，并用 `TRANSPORT_FAILURE` evidence 把 hypothesis 记为 pre-POST `INCONCLUSIVE`。POST 已确认后若 simulation terminal error/cancelled 且没有可用 Alpha result，则使用 `SIMULATION_FAILURE` evidence 记为 `POSTED_SIMULATION_FAILURE / INCONCLUSIVE`；不能伪造 performance Result。
+显式 pre-POST 4xx 且没有 Location 时可以 release，并用 `TRANSPORT_FAILURE` evidence 把 hypothesis 记为 pre-POST `INCONCLUSIVE`。POST 已确认后若 simulation terminal error/cancelled 且没有可用 Alpha result，则用 `SIMULATION_FAILURE` 关闭为 `POSTED_SIMULATION_FAILURE / INCONCLUSIVE`。若一个旧版本已 POST 的 frozen hypothesis 在新 contract 检查下发现 observation type 与 Incumbent snapshot schema 不可能匹配，则保存当前真实 Result snapshot，用 `RESULT_CONTRACT_FAILURE` 关闭为 `POSTED_RESULT_CONTRACT_FAILURE / INCONCLUSIVE`；不得事后改写 hypothesis，也不得把这类确定性 schema mismatch 无限当作 pending。
 
 非法 state transition 必须拒绝。`POSTED` 不能重新打开；`AMBIGUOUS_POST` 不能自动转 429/re-reserve。
 
@@ -284,16 +285,18 @@ Simulation 后提供 raw evidence；result classification/freshness 由 guard �
 }
 ```
 
+这里的 `response_complete` 只表示“当前 Result + dedicated submission-check snapshot 已结构化取得”，**不表示所有 check 已 terminal**。`PENDING/UNKNOWN/RUNNING/PROCESSING` 必须作为真实 current check row 保留；不能因为其中一项未终态就把整份 research Result 隐藏在 provider gate 之外。
+
 Guard 必须验证：
 
 - `simulation_id` 与已 POSTED request 一致；
-- result evidence 时间不早于 POST；
-- response complete + authenticated；
-- success criteria 是否成立；
-- protected metrics 是否满足预声明 policy；
-- candidate 是否引入新的 blocking check 或新的 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。若 candidate 新引入未分类 WARNING、PENDING/UNKNOWN 等 unresolved check，即使 metric criterion 已改善，也先记为 `INCONCLUSIVE`，不得 promotion，直到该 check 的当前语义被明确 resolve。
+- result evidence 时间不早于 POST，且 snapshot authenticated / source 可审计；
+- frozen success/protection contract 所需 typed observations 已存在；
+- 为了比较 new blocker/unresolved，当前 snapshot 不得无故丢失 Incumbent 已存在的 check 名称；
+- success criteria 与 protected metrics 是否成立；
+- candidate 是否引入**新的** blocking check 或新的 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved，不应阻止 mechanism-level evaluation；candidate 新引入的未分类 WARNING、PENDING/UNKNOWN 等 unresolved 才使结果 `INCONCLUSIVE`。
 
-`SUBMISSION_READY` 的要求更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；`PENDING/UNKNOWN` 等非终态也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。普通 `SUCCESS` 只表示 controller 判定用户目标已达到，不自动声称可提交。
+`SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
 
 只有 guard 计算为 `SUPPORTED` 的 result 才能 promotion。`REFUTED / INCONCLUSIVE` 不能靠调用者改布尔值绕过。
 
@@ -301,6 +304,6 @@ Guard 必须验证：
 
 `success_criteria` 应描述当前 hypothesis 的**机制预测**，不是机械复制最终 submission threshold。对于修复型路线，如果假设预测“Sharpe 应提高且 Fitness 不明显下降”，那么 candidate 在 `LOW_SHARPE` 仍为 FAIL 的情况下也可以得到 `SUPPORTED`，只要预声明 metric criterion / protected metrics 成立且没有新的 blocking/unresolved check。此时 promotion 表示“成为新的研究 parent / Incumbent”，**不表示** blocker 已修复，也不表示 `SUBMISSION_READY`。
 
-只有当 hypothesis 本身有充分理由预测“这一步就应跨过当前 check threshold”时，才把 `check required_status=PASS` 作为 success criterion。不要把所有 repair hypothesis 都写成“一步过线”，否则会把有价值的中间改善错误地归为失败。
+只有当 hypothesis 本身有充分理由预测“这一步就应跨过当前 check threshold”时，才把 `check required_status=PASS` 作为 success criterion。若机制预测的是 check 数值的方向性改善而不是一步过线，使用 `check_value`，例如从 `LOW_SUB_UNIVERSE_SHARPE.value=0.88` 提升到 `0.90` 可以满足预声明的 `min_change=0.01`，即使该 check 仍为 FAIL。不要把所有 repair hypothesis 都写成“一步过线”，也不要把 check.value 塞进普通 metrics。
 
 `REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。它**不自动证明整个 route mechanism 已耗尽**。Controller 只有在剩余 same-mechanism questions 已有负证据、重复、或没有新的可证伪信息时才能 `exhaust-focus`。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。
