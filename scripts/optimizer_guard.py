@@ -2240,16 +2240,6 @@ class StateStore:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF", "missing": missing_refs}
         if not (set(normalized["evidence_refs"]) & set(focus.get("evidence_refs", []))):
             return {"ok": False, "reason": "HYPOTHESIS_NOT_GROUNDED_IN_FOCUS_EVIDENCE"}
-        observation_missing = hypothesis_observation_schema_missing(
-            normalized,
-            (state.get("incumbent") or {}).get("result_evidence", {}),
-        )
-        if observation_missing:
-            return {
-                "ok": False,
-                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
-                "missing": observation_missing,
-            }
         if state.get("planning_contract") in {"v1", "v2"} and normalized["target"] != focus.get("target"):
             return {"ok": False, "reason": "HYPOTHESIS_TARGET_MISMATCH", "focus_target": focus.get("target"), "hypothesis_target": normalized["target"]}
         if state.get("planning_contract") in {"v1", "v2"}:
@@ -2262,6 +2252,16 @@ class StateStore:
                     "focus_mechanism": focus.get("mechanism"),
                     "hypothesis_mechanism": normalized.get("mechanism"),
                 }
+        observation_missing = hypothesis_observation_schema_missing(
+            normalized,
+            (state.get("incumbent") or {}).get("result_evidence", {}),
+        )
+        if observation_missing:
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
+                "missing": observation_missing,
+            }
         old = state["hypotheses"].get(hypothesis_id)
         if old:
             if old.get("status") == "OPEN" and _canonical_json(old.get("contract")) == _canonical_json(normalized):
