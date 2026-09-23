@@ -2,7 +2,7 @@
 name: wq-alpha-optimizer
 description: Use when the user provides an existing WorldQuant BRAIN Alpha ID and asks to diagnose submission blockers, optimize, improve, fix, enhance, or prepare that Alpha for submission.
 metadata:
-  version: 3.6.2
+  version: 3.6.3
 ---
 
 # WQ Alpha Optimizer
@@ -21,7 +21,7 @@ metadata:
 - **Same thesis / existing scope.** 普通 candidate 必须留在当前 Alpha 的既有 thesis/scope 内；锁定字段、新字段准入和 scope boundary 由 `references/runtime/candidate-contract.md` 统一定义。用户若要求比较 scope 变量，结束当前 candidate path 并记录 scope boundary。
 - **Minimal causal change.** 一次实验只回答一个 principal mechanism；复杂度增加必须由该机制解释。
 - **Preflight errors are recoverable before transport.** hypothesis 冻结后若 candidate preflight 在 reserve 之前发现 contract omission（例如漏写 `complexity_reason` / `field_change_reason`），不要伪造 transport failure、不要手改 state，也不要关闭 route。使用 Guard 的 `withdraw-hypothesis` 保留旧 hypothesis 审计记录，再用新 hypothesis ID 冻结修正后的 contract；一旦 reserve 已发生则禁止此路径。
-- **Reserved candidates are executed by one deterministic executor.** `reserve` 成功后，正常 controller 不再手工拼 WQ payload / record transport / result evidence / promotion；立即调用 `scripts/execute_reserved_candidate.py`。Executor 在真实 POST 前先持久化 `SUBMITTING`，201+Location 后立刻记 `POSTED`，之后只按 Location 续跑；重启看到 `SUBMITTING/AMBIGUOUS_POST` 时禁止自动重发。Result/check 完整后由 Guard evaluate，只有 machine `SUPPORTED` 才自动 promote。若返回 `resumable=true`（HTTP 429、poll exception/timeout、result/check 暂未完整），controller 在同一次 optimize invocation 内按同 fingerprint 继续调用 executor，不重新 intake、不重建 hypothesis、不重新 POST；只有 `recovery_required=true`、明确平台/auth 不可继续或得到 Result 后才离开该 executor loop。
+- **Reserved candidates are executed by one deterministic executor.** `reserve` 成功后，正常 controller 只调用一次 `scripts/execute_reserved_candidate.py`，不再手工拼 WQ payload、transport、poll、Result/check evidence 或 promotion。Executor 在真实 POST 前先持久化 `SUBMITTING`，201+Location 后立刻记 `POSTED`，之后只按 Location 续跑，并在内部有界处理 429、poll/result 暂不可得和 incomplete snapshot；正常返回必须已经到 evaluated Result、promotion、posted inconclusive，或明确 `recovery_required` boundary。Controller 不承担“看到 resumable 再调用一次”的正确性责任，也不得重新 intake、重建 hypothesis 或重复 POST。
 - **Progress, then re-plan.** Hypothesis support 判断的是预声明的 mechanism prediction，不要求每一步 candidate 直接把最终平台 blocker 从 FAIL 变 PASS。若 directional improvement 满足 success/protection contract 且没有新 blocker，可以 promotion 为新的 Incumbent；随后必须 fresh re-profile/re-plan。Root 始终 immutable，用于控制 drift。
 - **Result facts before conclusions.** 平台结果/check evidence 先于“成功/失败”叙事；指标变好本身不等于机制得到支持。
 - **Stop is a valid outcome.** 当前 scope 内没有新的合理可证伪问题时停止，而不是扩大自由度；但如果一个当前 scope 内可取得的 diagnostic 能实质区分机制，必须先完成/复用该诊断，不能把“还没诊断”写成 evidence exhaustion。
