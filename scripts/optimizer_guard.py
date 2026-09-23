@@ -44,6 +44,7 @@ MECHANISM_CATALOG_PATH = SKILL_ROOT / "references" / "runtime" / "mechanism-cata
 SYNTHESIS_ACTIONABLE = {"ACTIONABLE", "PLAUSIBLE_PROBE"}
 SYNTHESIS_STATUSES = SYNTHESIS_ACTIONABLE | {"NEEDS_DIAGNOSTIC", "EXCLUDED"}
 SYNTHESIS_EXCLUSION_BASES = {"CURRENT_DIAGNOSTIC", "CURRENT_CANDIDATE_RESULT", "SCOPE_BOUNDARY"}
+TRANSIENT_CHECK_STATUSES = {"PENDING", "UNKNOWN", "RUNNING", "PROCESSING"}
 
 
 def _safe_component(value: Any) -> str:
@@ -354,6 +355,15 @@ def _numeric_check_value(row: Dict[str, Any] | None) -> float | None:
 
 def _check_row_map(checks: list[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(row["name"]): row for row in checks}
+
+
+def _directional_change(before: float, after: float, direction: str, min_change: float) -> tuple[float, bool]:
+    delta = after - before
+    if direction == "higher":
+        passed = delta > 0 if min_change == 0 else delta >= min_change
+    else:
+        passed = delta < 0 if min_change == 0 else -delta >= min_change
+    return delta, passed
 
 
 def hypothesis_observation_schema_missing(
@@ -1242,61 +1252,94 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
 
     criterion_results = []
     missing = []
-    for c in contract.get("success_criteria", []):
-        kind = c["type"]
-        name = c["name"]
+    for criterion in contract.get("success_criteria", []):
+        kind = criterion["type"]
+        name = criterion["name"]
+
         if kind == "metric":
             if name not in before_metrics or name not in after_metrics:
                 missing.append(f"metric:{name}")
                 continue
-            b, a, min_change = before_metrics[name], after_metrics[name], float(c.get("min_change", 0.0))
-            delta = a - b
-            passed = delta > 0 if c["direction"] == "higher" and min_change == 0 else (
-                delta >= min_change if c["direction"] == "higher" else (
-                    delta < 0 if min_change == 0 else -delta >= min_change
-                )
-            )
-            criterion_results.append({"criterion": c, "before": b, "after": a, "delta": delta, "passed": passed})
-        elif kind == "check":
-            row = after_check_map.get(str(name))
-            if row is None:
-                missing.append(f"check:{name}")
-                continue
-            status = str(row.get("status") or "").upper()
-            passed = status == c["required_status"]
-            criterion_results.append({"criterion": c, "after": status, "passed": passed})
-        else:
-            before_value = _numeric_check_value(before_check_map.get(str(name)))
-            after_value = _numeric_check_value(after_check_map.get(str(name)))
-            if before_value is None or after_value is None:
-                missing.append(f"check_value:{name}")
-                continue
-            min_change = float(c.get("min_change", 0.0))
-            delta = after_value - before_value
-            passed = delta > 0 if c["direction"] == "higher" and min_change == 0 else (
-                delta >= min_change if c["direction"] == "higher" else (
-                    delta < 0 if min_change == 0 else -delta >= min_change
-                )
+            before_value = before_metrics[name]
+            after_value = after_metrics[name]
+            delta, passed = _directional_change(
+                before_value,
+                after_value,
+                criterion["direction"],
+                float(criterion.get("min_change", 0.0)),
             )
             criterion_results.append(
                 {
-                    "criterion": c,
+                    "criterion": criterion,
                     "before": before_value,
                     "after": after_value,
                     "delta": delta,
                     "passed": passed,
                 }
             )
+            continue
+
+        if kind == "check":
+            row = after_check_map.get(str(name))
+            if row is None:
+                missing.append(f"check:{name}")
+                continue
+            status = str(row.get("status") or "").upper()
+            if status in TRANSIENT_CHECK_STATUSES:
+                missing.append(f"check_status:{name}")
+                continue
+            criterion_results.append(
+                {
+                    "criterion": criterion,
+                    "after": status,
+                    "passed": status == criterion["required_status"],
+                }
+            )
+            continue
+
+        before_value = _numeric_check_value(before_check_map.get(str(name)))
+        after_value = _numeric_check_value(after_check_map.get(str(name)))
+        if before_value is None or after_value is None:
+            missing.append(f"check_value:{name}")
+            continue
+        delta, passed = _directional_change(
+            before_value,
+            after_value,
+            criterion["direction"],
+            float(criterion.get("min_change", 0.0)),
+        )
+        criterion_results.append(
+            {
+                "criterion": criterion,
+                "before": before_value,
+                "after": after_value,
+                "delta": delta,
+                "passed": passed,
+            }
+        )
 
     protected_results = []
-    for p in contract.get("protected_metrics", []):
-        name = p["name"]
+    for policy in contract.get("protected_metrics", []):
+        name = policy["name"]
         if name not in before_metrics or name not in after_metrics:
             missing.append(f"protected_metric:{name}")
             continue
-        b, a, tol = before_metrics[name], after_metrics[name], float(p.get("tolerance", 0.0))
-        passed = a >= b - tol if p["rule"] == "not_lower" else a <= b + tol
-        protected_results.append({"policy": p, "before": b, "after": a, "passed": passed})
+        before_value = before_metrics[name]
+        after_value = after_metrics[name]
+        tolerance = float(policy.get("tolerance", 0.0))
+        passed = (
+            after_value >= before_value - tolerance
+            if policy["rule"] == "not_lower"
+            else after_value <= before_value + tolerance
+        )
+        protected_results.append(
+            {
+                "policy": policy,
+                "before": before_value,
+                "after": after_value,
+                "passed": passed,
+            }
+        )
 
     before_check_names = set(before_check_map)
     after_check_names = set(after_check_map)
@@ -1308,12 +1351,19 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     old_unresolved = _unresolved_checks(before_checks)
     candidate_unresolved = _unresolved_checks(after_checks)
     new_unresolved = candidate_unresolved - old_unresolved
+
     if missing or new_unresolved:
         status = "INCONCLUSIVE"
-    elif criterion_results and all(x["passed"] for x in criterion_results) and all(x["passed"] for x in protected_results) and not new_blockers:
+    elif (
+        criterion_results
+        and all(item["passed"] for item in criterion_results)
+        and all(item["passed"] for item in protected_results)
+        and not new_blockers
+    ):
         status = "SUPPORTED"
     else:
         status = "REFUTED"
+
     return {
         "status": status,
         "criterion_results": criterion_results,
