@@ -344,6 +344,143 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertEqual(wq.start_calls, 1)
         self.assertEqual(wq.poll_calls, 2)
 
+    def test_executor_owns_resumable_result_continuation_without_repost(self):
+        class DelayedChecksWQ(SequenceWQ):
+            def __init__(self, submissions, polls):
+                super().__init__(submissions, polls)
+                self.check_calls = 0
+
+            def get_submission_check(self, session, alpha_id):
+                self.check_calls += 1
+                if self.check_calls == 1:
+                    return {}
+                return super().get_submission_check(session, alpha_id)
+
+        wq = DelayedChecksWQ(
+            [FakeResponse(201, location="/simulations/S4-loop")],
+            [
+                {"status": "done", "alpha_id": "CHILD"},
+                {"status": "done", "alpha_id": "CHILD"},
+            ],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=2,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "PROMOTED")
+        self.assertEqual(result["continuations"], 1)
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 2)
+
+    def test_executor_owns_http_429_retry_budget(self):
+        wq = SequenceWQ(
+            [
+                FakeResponse(429, text="rate limited"),
+                FakeResponse(201, location="/simulations/S2-loop"),
+            ],
+            [{"status": "done", "alpha_id": "CHILD"}],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=2,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "PROMOTED")
+        self.assertEqual(result["continuations"], 1)
+        self.assertEqual(wq.start_calls, 2)
+
+    def test_legacy_posted_contract_schema_mismatch_closes_inconclusive(self):
+        state = self.store.read()
+        state["hypotheses"]["H1"]["contract"]["success_criteria"] = [
+            {"type": "metric", "name": "LOW_SHARPE", "direction": "higher", "min_change": 0.01}
+        ]
+        self.store._write(state)
+
+        wq = SequenceWQ(
+            [FakeResponse(201, location="/simulations/S-legacy")],
+            [{"status": "done", "alpha_id": "CHILD-LEGACY"}],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=1,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "POSTED_RESULT_CONTRACT_INCONCLUSIVE")
+        self.assertIn("metric:LOW_SHARPE", result["missing_baseline_observations"])
+        state = self.store.read()
+        self.assertEqual(state["hypotheses"]["H1"]["status"], "INCONCLUSIVE")
+        self.assertEqual(
+            state["hypotheses"]["H1"]["result"]["disposition"],
+            "POSTED_RESULT_CONTRACT_FAILURE",
+        )
+        self.assertNotIn("result_evaluation", state["candidates"][self.fingerprint])
+
+    def test_result_fetch_exception_is_retried_by_executor(self):
+        class TransientResultWQ(SequenceWQ):
+            def __init__(self, submissions, polls):
+                super().__init__(submissions, polls)
+                self.result_calls = 0
+
+            def get_result(self, session, alpha_id):
+                self.result_calls += 1
+                if self.result_calls == 1:
+                    raise RuntimeError("temporary result read failure")
+                return super().get_result(session, alpha_id)
+
+        wq = TransientResultWQ(
+            [FakeResponse(201, location="/simulations/S-result-retry")],
+            [
+                {"status": "done", "alpha_id": "CHILD"},
+                {"status": "done", "alpha_id": "CHILD"},
+            ],
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=2,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "PROMOTED")
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 2)
+        self.assertEqual(wq.result_calls, 2)
+
+    def test_executor_stops_at_explicit_reconciliation_after_bounded_wait(self):
+        wq = SequenceWQ(
+            [FakeResponse(201, location="/simulations/S-pending")],
+            [
+                {"status": "done", "alpha_id": "CHILD"},
+                {"status": "done", "alpha_id": "CHILD"},
+            ],
+            checks_complete=False,
+        )
+        result = executor.execute_until_boundary(
+            self.store,
+            wq,
+            object(),
+            max_continuations=1,
+            sleep_seconds=0,
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stage"], "CONTINUATION_RECONCILIATION_REQUIRED")
+        self.assertTrue(result["recovery_required"])
+        self.assertEqual(result["last_stage"], "RESULT_EVIDENCE_PENDING")
+        self.assertEqual(wq.start_calls, 1)
+        self.assertEqual(wq.poll_calls, 2)
+        self.assertEqual(self.store.read()["simulations"][self.fingerprint]["status"], "POSTED")
+
     def test_poll_exception_keeps_posted_location_for_safe_resume(self):
         wq = SequenceWQ(
             [FakeResponse(201, location="/simulations/S5")],
