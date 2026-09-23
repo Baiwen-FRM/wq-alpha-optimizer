@@ -402,6 +402,41 @@ def hypothesis_observation_schema_missing(
     return sorted(set(missing))
 
 
+def candidate_result_pending_observations(
+    contract: Dict[str, Any],
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+) -> list[str]:
+    """Return observations that must resolve before a candidate can be evaluated."""
+    missing = hypothesis_observation_schema_missing(contract, after)
+    try:
+        before_checks = _normalize_checks((before or {}).get("checks"))
+        after_checks = _normalize_checks((after or {}).get("checks"))
+    except ValueError:
+        return sorted(set([*missing, "result_evidence:invalid"]))
+
+    before_map = _check_row_map(before_checks)
+    after_map = _check_row_map(after_checks)
+    missing.extend(f"check:{name}" for name in sorted(set(before_map) - set(after_map)))
+
+    before_unresolved = _unresolved_checks(before_checks)
+    for name, row in after_map.items():
+        status = str(row.get("status") or "").upper()
+        if status in TRANSIENT_CHECK_STATUSES and name not in before_unresolved:
+            missing.append(f"new_check_status:{name}")
+
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict) or criterion.get("type") != "check":
+            continue
+        name = str(criterion.get("name") or "")
+        row = after_map.get(name)
+        status = str((row or {}).get("status") or "").upper()
+        if row is not None and status in TRANSIENT_CHECK_STATUSES:
+            missing.append(f"check_status:{name}")
+
+    return sorted(set(missing))
+
+
 def _fail_blockers(checks: list[Dict[str, Any]]) -> set[str]:
     return {str(c["name"]) for c in checks if bool(c.get("blocking")) or str(c.get("status", "")).upper() == "FAIL"}
 
