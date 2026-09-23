@@ -234,6 +234,13 @@ class PlanningGuardTests(TestCase):
             "complexity_reason": "The declared expression mutation is the single tested mechanism.",
         }
 
+    def _post(self, fingerprint, simulation_id):
+        begun = self.store.begin_submission(fingerprint)
+        self.assertTrue(begun["ok"], begun)
+        posted = self.store.record_transport(fingerprint, "POSTED", simulation_id)
+        self.assertTrue(posted["ok"], posted)
+        return posted
+
     def _promote_current_plan(self, target="SHARPE", evidence="E1", child_id="CHILD", expression="rank(-close)"):
         mechanism = (self.store.read().get("focus") or {}).get("mechanism") or "signal_quality"
         opened = self.store.open_hypothesis("H1", self._hypothesis_contract(target, [evidence], mechanism=mechanism))
@@ -249,7 +256,7 @@ class PlanningGuardTests(TestCase):
         reserved = self.store.reserve_simulation(candidate)
         self.assertTrue(reserved["allowed"], reserved)
         fingerprint = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fingerprint, "POSTED", f"SIM-{child_id}")["ok"])
+        self._post(fingerprint, f"SIM-{child_id}")
         evaluated = self.store.evaluate_result(
             candidate,
             {
@@ -326,7 +333,7 @@ class PlanningGuardTests(TestCase):
         reserved = self.store.reserve_simulation(candidate)
         self.assertTrue(reserved["allowed"], reserved)
         fingerprint = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fingerprint, "POSTED", "SIM-ROUTE-RESULT")["ok"])
+        self._post(fingerprint, "SIM-ROUTE-RESULT")
         evaluated = self.store.evaluate_result(
             candidate,
             {
@@ -420,7 +427,7 @@ class PlanningGuardTests(TestCase):
         reserved = self.store.reserve_simulation(candidate)
         self.assertTrue(reserved["allowed"], reserved)
         fingerprint = reserved["fingerprint"]
-        self.assertTrue(self.store.record_transport(fingerprint, "POSTED", "SIM-1")["ok"])
+        self._post(fingerprint, "SIM-1")
         evaluated = self.store.evaluate_result(
             candidate,
             {
