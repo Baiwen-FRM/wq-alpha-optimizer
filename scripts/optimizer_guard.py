@@ -44,6 +44,7 @@ MECHANISM_CATALOG_PATH = SKILL_ROOT / "references" / "runtime" / "mechanism-cata
 SYNTHESIS_ACTIONABLE = {"ACTIONABLE", "PLAUSIBLE_PROBE"}
 SYNTHESIS_STATUSES = SYNTHESIS_ACTIONABLE | {"NEEDS_DIAGNOSTIC", "EXCLUDED"}
 SYNTHESIS_EXCLUSION_BASES = {"CURRENT_DIAGNOSTIC", "CURRENT_CANDIDATE_RESULT", "SCOPE_BOUNDARY"}
+TRANSIENT_CHECK_STATUSES = {"PENDING", "UNKNOWN", "RUNNING", "PROCESSING"}
 
 
 def _safe_component(value: Any) -> str:
@@ -95,11 +96,6 @@ def _render_run_log(state: Dict[str, Any]) -> str:
 HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE", "WITHDRAWN"}
 FOCUS_TYPES = {"DEFECT", "ENHANCEMENT"}
 TRANSPORT_TRANSITIONS = {
-    # RESERVED direct transitions remain for compatibility with controllers that
-    # perform the external POST themselves. The Skill-owned executor uses the
-    # stricter RESERVED -> SUBMITTING -> ... path so a crash cannot trigger an
-    # automatic duplicate POST.
-    "RESERVED": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
     "SUBMITTING": {"POSTED", "HTTP_429", "AMBIGUOUS_POST"},
     "AMBIGUOUS_POST": {"POSTED"},  # recovery discovers the original simulation; never repost
 }
@@ -346,6 +342,99 @@ def _normalize_metrics(metrics: Any) -> Dict[str, float]:
             raise ValueError(f"metric {key} must be numeric")
         out[str(key).upper()] = float(value)
     return out
+
+
+def _numeric_check_value(row: Dict[str, Any] | None) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    value = row.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _check_row_map(checks: list[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {str(row["name"]): row for row in checks}
+
+
+def _directional_change(before: float, after: float, direction: str, min_change: float) -> tuple[float, bool]:
+    delta = after - before
+    if direction == "higher":
+        passed = delta > 0 if min_change == 0 else delta >= min_change
+    else:
+        passed = delta < 0 if min_change == 0 else -delta >= min_change
+    return delta, passed
+
+
+def hypothesis_observation_schema_missing(
+    contract: Dict[str, Any],
+    result_evidence: Dict[str, Any],
+) -> list[str]:
+    """Return frozen observations that cannot be sourced from this snapshot schema."""
+    try:
+        metrics = _normalize_metrics((result_evidence or {}).get("metrics"))
+        checks = _normalize_checks((result_evidence or {}).get("checks"))
+    except ValueError:
+        return ["result_evidence:invalid"]
+    check_map = _check_row_map(checks)
+    missing: list[str] = []
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict):
+            continue
+        kind = str(criterion.get("type") or "")
+        name = str(criterion.get("name") or "")
+        if kind == "metric":
+            metric_name = name.upper()
+            if metric_name and metric_name not in metrics:
+                missing.append(f"metric:{metric_name}")
+        elif kind == "check":
+            if name and name not in check_map:
+                missing.append(f"check:{name}")
+        elif kind == "check_value":
+            if name and _numeric_check_value(check_map.get(name)) is None:
+                missing.append(f"check_value:{name}")
+    for policy in contract.get("protected_metrics", []):
+        if not isinstance(policy, dict):
+            continue
+        name = str(policy.get("name") or "").upper()
+        if name and name not in metrics:
+            missing.append(f"protected_metric:{name}")
+    return sorted(set(missing))
+
+
+def candidate_result_pending_observations(
+    contract: Dict[str, Any],
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+) -> list[str]:
+    """Return observations that must resolve before a candidate can be evaluated."""
+    missing = hypothesis_observation_schema_missing(contract, after)
+    try:
+        before_checks = _normalize_checks((before or {}).get("checks"))
+        after_checks = _normalize_checks((after or {}).get("checks"))
+    except ValueError:
+        return sorted(set([*missing, "result_evidence:invalid"]))
+
+    before_map = _check_row_map(before_checks)
+    after_map = _check_row_map(after_checks)
+    missing.extend(f"check:{name}" for name in sorted(set(before_map) - set(after_map)))
+
+    before_unresolved = _unresolved_checks(before_checks)
+    for name, row in after_map.items():
+        status = str(row.get("status") or "").upper()
+        if status in TRANSIENT_CHECK_STATUSES and name not in before_unresolved:
+            missing.append(f"new_check_status:{name}")
+
+    for criterion in contract.get("success_criteria", []):
+        if not isinstance(criterion, dict) or criterion.get("type") != "check":
+            continue
+        name = str(criterion.get("name") or "")
+        row = after_map.get(name)
+        status = str((row or {}).get("status") or "").upper()
+        if row is not None and status in TRANSIENT_CHECK_STATUSES:
+            missing.append(f"check_status:{name}")
+
+    return sorted(set(missing))
 
 
 def _fail_blockers(checks: list[Dict[str, Any]]) -> set[str]:
@@ -972,23 +1061,25 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("hypothesis mutation must be expression or setting")
     if mutation.get("type") == "setting" and not _nonempty(mutation.get("key")):
         raise ValueError("setting hypothesis requires mutation.key")
+
     criteria = contract["success_criteria"]
     if not isinstance(criteria, list) or not criteria:
         raise ValueError("success_criteria must be a non-empty list")
     normalized_criteria = []
     for c in criteria:
-        if not isinstance(c, dict) or c.get("type") not in {"metric", "check"} or not _nonempty(c.get("name")):
-            raise ValueError("invalid success criterion")
+        if not isinstance(c, dict) or c.get("type") not in {"metric", "check", "check_value"} or not _nonempty(c.get("name")):
+            raise ValueError("success criterion type must be metric/check/check_value with a name")
         row = dict(c)
         row["type"] = str(row["type"]).lower()
         row["name"] = str(row["name"]).upper() if row["type"] == "metric" else str(row["name"])
-        if row["type"] == "metric":
+        if row["type"] in {"metric", "check_value"}:
             if row.get("direction") not in {"higher", "lower"}:
-                raise ValueError("metric criterion direction must be higher/lower")
+                raise ValueError(f"{row['type']} criterion direction must be higher/lower")
             min_change = row.get("min_change", 0.0)
             if isinstance(min_change, bool) or not isinstance(min_change, (int, float)) or float(min_change) < 0:
-                raise ValueError("metric criterion min_change must be non-negative")
+                raise ValueError(f"{row['type']} criterion min_change must be non-negative")
             row["min_change"] = float(min_change)
+            row.pop("required_status", None)
             row.pop("tolerance", None)
         else:
             if not _nonempty(row.get("required_status")):
@@ -996,6 +1087,8 @@ def _validate_hypothesis_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
             row["required_status"] = str(row["required_status"]).upper()
             if row["required_status"] != "PASS":
                 raise ValueError("check success criterion must require PASS")
+            row.pop("direction", None)
+            row.pop("min_change", None)
         normalized_criteria.append(row)
 
     protected = contract["protected_metrics"]
@@ -1180,52 +1273,107 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
     return out
 
 
-def _check_status_map(checks: list[Dict[str, Any]]) -> Dict[str, str]:
-    return {str(c["name"]): str(c["status"]).upper() for c in checks}
-
-
 def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
     before_metrics = _normalize_metrics((before or {}).get("metrics"))
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
     before_checks = _normalize_checks((before or {}).get("checks"))
     after_checks = _normalize_checks((after or {}).get("checks"))
-    after_check_map = _check_status_map(after_checks)
+    before_check_map = _check_row_map(before_checks)
+    after_check_map = _check_row_map(after_checks)
 
     criterion_results = []
     missing = []
-    for c in contract.get("success_criteria", []):
-        if c["type"] == "metric":
-            name = c["name"]
+    for criterion in contract.get("success_criteria", []):
+        kind = criterion["type"]
+        name = criterion["name"]
+
+        if kind == "metric":
             if name not in before_metrics or name not in after_metrics:
                 missing.append(f"metric:{name}")
                 continue
-            b, a, min_change = before_metrics[name], after_metrics[name], float(c.get("min_change", 0.0))
-            delta = a - b
-            if c["direction"] == "higher":
-                passed = delta > 0 if min_change == 0 else delta >= min_change
-            else:
-                passed = delta < 0 if min_change == 0 else -delta >= min_change
-            criterion_results.append({"criterion": c, "before": b, "after": a, "delta": delta, "passed": passed})
-        else:
-            name = c["name"]
-            if name not in after_check_map:
+            before_value = before_metrics[name]
+            after_value = after_metrics[name]
+            delta, passed = _directional_change(
+                before_value,
+                after_value,
+                criterion["direction"],
+                float(criterion.get("min_change", 0.0)),
+            )
+            criterion_results.append(
+                {
+                    "criterion": criterion,
+                    "before": before_value,
+                    "after": after_value,
+                    "delta": delta,
+                    "passed": passed,
+                }
+            )
+            continue
+
+        if kind == "check":
+            row = after_check_map.get(str(name))
+            if row is None:
                 missing.append(f"check:{name}")
                 continue
-            passed = after_check_map[name] == c["required_status"]
-            criterion_results.append({"criterion": c, "after": after_check_map[name], "passed": passed})
+            status = str(row.get("status") or "").upper()
+            if status in TRANSIENT_CHECK_STATUSES:
+                missing.append(f"check_status:{name}")
+                continue
+            criterion_results.append(
+                {
+                    "criterion": criterion,
+                    "after": status,
+                    "passed": status == criterion["required_status"],
+                }
+            )
+            continue
+
+        before_value = _numeric_check_value(before_check_map.get(str(name)))
+        after_value = _numeric_check_value(after_check_map.get(str(name)))
+        if before_value is None or after_value is None:
+            missing.append(f"check_value:{name}")
+            continue
+        delta, passed = _directional_change(
+            before_value,
+            after_value,
+            criterion["direction"],
+            float(criterion.get("min_change", 0.0)),
+        )
+        criterion_results.append(
+            {
+                "criterion": criterion,
+                "before": before_value,
+                "after": after_value,
+                "delta": delta,
+                "passed": passed,
+            }
+        )
 
     protected_results = []
-    for p in contract.get("protected_metrics", []):
-        name = p["name"]
+    for policy in contract.get("protected_metrics", []):
+        name = policy["name"]
         if name not in before_metrics or name not in after_metrics:
             missing.append(f"protected_metric:{name}")
             continue
-        b, a, tol = before_metrics[name], after_metrics[name], float(p.get("tolerance", 0.0))
-        passed = a >= b - tol if p["rule"] == "not_lower" else a <= b + tol
-        protected_results.append({"policy": p, "before": b, "after": a, "passed": passed})
+        before_value = before_metrics[name]
+        after_value = after_metrics[name]
+        tolerance = float(policy.get("tolerance", 0.0))
+        passed = (
+            after_value >= before_value - tolerance
+            if policy["rule"] == "not_lower"
+            else after_value <= before_value + tolerance
+        )
+        protected_results.append(
+            {
+                "policy": policy,
+                "before": before_value,
+                "after": after_value,
+                "passed": passed,
+            }
+        )
 
-    before_check_names = {str(row["name"]) for row in before_checks}
-    after_check_names = {str(row["name"]) for row in after_checks}
+    before_check_names = set(before_check_map)
+    after_check_names = set(after_check_map)
     missing_prior_checks = before_check_names - after_check_names
     missing.extend(f"check:{name}" for name in sorted(missing_prior_checks))
 
@@ -1234,12 +1382,19 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     old_unresolved = _unresolved_checks(before_checks)
     candidate_unresolved = _unresolved_checks(after_checks)
     new_unresolved = candidate_unresolved - old_unresolved
+
     if missing or new_unresolved:
         status = "INCONCLUSIVE"
-    elif criterion_results and all(x["passed"] for x in criterion_results) and all(x["passed"] for x in protected_results) and not new_blockers:
+    elif (
+        criterion_results
+        and all(item["passed"] for item in criterion_results)
+        and all(item["passed"] for item in protected_results)
+        and not new_blockers
+    ):
         status = "SUPPORTED"
     else:
         status = "REFUTED"
+
     return {
         "status": status,
         "criterion_results": criterion_results,
@@ -2184,6 +2339,16 @@ class StateStore:
         ]
         if other_open:
             return {"ok": False, "reason": "OPEN_HYPOTHESIS_EXISTS", "hypotheses": sorted(other_open)}
+        observation_missing = hypothesis_observation_schema_missing(
+            normalized,
+            (state.get("incumbent") or {}).get("result_evidence", {}),
+        )
+        if observation_missing:
+            return {
+                "ok": False,
+                "reason": "HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH",
+                "missing": observation_missing,
+            }
         state["hypotheses"][hypothesis_id] = {
             "contract": normalized,
             "status": "OPEN",
@@ -2487,10 +2652,10 @@ class StateStore:
             "fingerprint": fingerprint,
         }
 
-    def fail_posted_hypothesis(self, hypothesis_id: str, evidence_ref: str, reason: str) -> Dict[str, Any]:
-        """Close a POSTED simulation that terminated without usable Alpha result evidence."""
+    def close_posted_hypothesis(self, hypothesis_id: str, evidence_ref: str, reason: str) -> Dict[str, Any]:
+        """Close an OPEN hypothesis after a confirmed POST when no valid evaluation is possible."""
         if not hypothesis_id.strip() or not evidence_ref.strip() or not reason.strip():
-            return {"ok": False, "reason": "POSTED_FAILURE_CONTRACT_REQUIRED"}
+            return {"ok": False, "reason": "POSTED_INCONCLUSIVE_CONTRACT_REQUIRED"}
         state = self.read()
         terminal = _terminal_rejection(state)
         if terminal:
@@ -2509,8 +2674,17 @@ class StateStore:
         evidence = state.get("evidence", {}).get(evidence_ref)
         if not evidence:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF"}
-        if evidence.get("kind") != "SIMULATION_FAILURE" or evidence.get("subject") != hypothesis_id:
-            return {"ok": False, "reason": "SIMULATION_FAILURE_EVIDENCE_MISMATCH"}
+        kind = str(evidence.get("kind") or "")
+        dispositions = {
+            "SIMULATION_FAILURE": "POSTED_SIMULATION_FAILURE",
+            "RESULT_CONTRACT_FAILURE": "POSTED_RESULT_CONTRACT_FAILURE",
+        }
+        if kind not in dispositions or evidence.get("subject") != hypothesis_id:
+            return {
+                "ok": False,
+                "reason": "POSTED_INCONCLUSIVE_EVIDENCE_MISMATCH",
+                "evidence_kind": kind,
+            }
 
         fingerprint = hypothesis.get("candidate_fingerprint")
         if not fingerprint:
@@ -2523,9 +2697,10 @@ class StateStore:
                 "status": None if not simulation else simulation.get("status"),
             }
 
+        disposition = dispositions[kind]
         hypothesis["status"] = "INCONCLUSIVE"
         hypothesis["result"] = {
-            "disposition": "POSTED_SIMULATION_FAILURE",
+            "disposition": disposition,
             "reason": reason.strip(),
             "evidence_ref": evidence_ref,
             "simulation_id": simulation.get("simulation_id"),
@@ -2540,6 +2715,7 @@ class StateStore:
             "ok": True,
             "hypothesis_id": hypothesis_id,
             "status": "INCONCLUSIVE",
+            "disposition": disposition,
             "evidence_ref": evidence_ref,
             "fingerprint": fingerprint,
             "simulation_id": simulation.get("simulation_id"),
@@ -2794,7 +2970,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("begin-submission"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True)
     p = sub.add_parser("record"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--status", required=True); p.add_argument("--simulation-id")
     p = sub.add_parser("release"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--reason", required=True)
-    p = sub.add_parser("fail-posted-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("close-posted-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("evaluate"); p.add_argument("--candidate", required=True); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("promote"); p.add_argument("--candidate", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
 
@@ -2825,7 +3001,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "begin-submission": out = StateStore(args.state, args.root_alpha_id).begin_submission(args.fingerprint)
         elif args.cmd == "record": out = StateStore(args.state, args.root_alpha_id).record_transport(args.fingerprint, args.status, args.simulation_id)
         elif args.cmd == "release": out = StateStore(args.state, args.root_alpha_id).release_reservation(args.fingerprint, args.reason)
-        elif args.cmd == "fail-posted-hypothesis": out = StateStore(args.state, args.root_alpha_id).fail_posted_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
+        elif args.cmd == "close-posted-hypothesis": out = StateStore(args.state, args.root_alpha_id).close_posted_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
         elif args.cmd == "evaluate": out = StateStore(args.state, args.root_alpha_id).evaluate_result(_load_json_arg(args.candidate), _load_json_arg(args.result))
         else: out = StateStore(args.state, args.root_alpha_id).promote(_load_json_arg(args.candidate))
     except (ValueError, KeyError, json.JSONDecodeError) as exc:

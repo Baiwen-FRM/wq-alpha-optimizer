@@ -48,9 +48,9 @@ After `optimizer_guard.py reserve` returns `allowed=true`, run:
 python3 scripts/execute_reserved_candidate.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check evidence → evaluate → promote-if-SUPPORTED`. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. Re-running a POSTED candidate resumes by Location; it never sends a second POST. `SUBMITTING/AMBIGUOUS_POST` requires reconciliation rather than blind retry.
+It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check snapshot → evaluate → promote-if-SUPPORTED`. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. The command itself performs bounded safe continuation for 429, poll/result reads and temporarily incomplete snapshots; a normal controller invokes it once per reserved candidate. Re-running a POSTED candidate still resumes by Location and never sends a second POST. `SUBMITTING/AMBIGUOUS_POST` and exhausted bounded continuation return an explicit reconciliation boundary rather than blind retry.
 
-Outputs with `resumable=true` are expected safe continuation states. The optimizer controller should call the same command again within the same run; the CLI exits successfully for these states. Do not re-bootstrap or manufacture a new candidate while a resumable fingerprint is active.
+The executor also closes a legacy already-POSTED hypothesis as `INCONCLUSIVE` when its frozen observation type cannot exist in the Incumbent snapshot schema; it preserves the real Result evidence and never rewrites the frozen contract after seeing outcome data.
 
 ## Deterministic bootstrap
 

@@ -116,15 +116,15 @@ ENHANCEMENT 不是无限优化许可，也不能用来绕过已有 FAIL blocker�
 
 若 candidate 引入或改变 operator family、GROUP/VECTOR 参数角色、named argument 或其它可能受 live signature 影响的结构，在 reserve/POST 前用当前 `get_operators()` 定义核对名称、arity/type/NaN 语义，并把能驱动决定的结论注册为 evidence。轻量 FE tokenizer 只负责 lexical/field/diff guard，不声称替代 live type checking。
 
-Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。
+Primary reference 负责提出经济机制；guard contract 负责判断该实验在机器层面是否允许执行。Hypothesis freeze 时必须通过 typed observation schema 校验：普通 Result 数值用 `metric`，submission-check 状态用 `check`，check row 的数值用 `check_value`；类型不匹配在 transport 前拒绝，不留给 Result 阶段补救。
 
 ## Stage F — RESULT → CLOSEOUT
 
-Simulation 后先登记 raw Result/check evidence，再由 guard 按 `candidate-contract.md` 计算 hypothesis 状态。需要重新读取当前 Incumbent 的 fresh Result/checks（例如 promotion 后、终检前或平台状态更新后）时，使用 `refresh-incumbent`；任何用于新 plan 的 fresh facts 仍要另外注册 evidence refs。Controller 只根据 machine status 继续：
+Simulation/Result transport 由 `execute_reserved_candidate.py` 一次调用有界执行到 machine decision 或明确 reconciliation boundary；controller 不负责反复调用 executor 来完成 poll/result wait。拿到 current raw Result/check snapshot 后由 guard 按 `candidate-contract.md` 计算 hypothesis 状态。需要重新读取当前 Incumbent 的 fresh Result/checks（例如 promotion 后、终检前或平台状态更新后）时，使用 `refresh-incumbent`；任何用于新 plan 的 fresh facts 仍要另外注册 evidence refs。Controller 只根据最终 machine status 继续：
 
 - `SUPPORTED`：尝试 promotion。这里的 supported 是**mechanism-level research progress**，不要求最终 blocker 已 PASS；promotion 后把 candidate 作为新的 Incumbent，旧 plan STALE，回到 fresh diagnosis/routing。若 blocker 仍存在，只能基于新 Incumbent 的新事实提出下一步，不得机械扫描相邻参数。
 - `REFUTED`：淘汰当前 frozen hypothesis/payload；不要自动把整个 mechanism family 标为 exhausted。只有该 mechanism 下已没有不同、未解决且 evidence-supported 的 falsifiable question 时才关闭 route。
-- `INCONCLUSIVE`：只有缺失信息能够被明确补齐时才 retest；否则停止该问题。
+- `INCONCLUSIVE`：当前 frozen hypothesis 已结束，不原地改合同或重复 POST。若原因是旧合同/schema 与真实平台 observation 不匹配，保留已取得的真实 Result/check 作为 post-activation diagnostic evidence，并用它关闭/重规划当前问题；后续实验必须以新的 hypothesis ID 正确冻结 observation type。其它 inconclusive 只有在新增信息能明确改变可判定性时才开新 hypothesis，否则关闭该问题。Executor 内部尚可等待的 transient poll/check 状态不属于这里的 final `INCONCLUSIVE`。
 - 当前 focus 已没有新的合理 question：`exhaust-focus`。如果该 route 已有 evaluated candidate Result，可以直接关闭；如果该 route 从激活后还没有 candidate Result，则必须先注册一个**激活之后新出现且 fingerprint 实质新的 diagnostic evidence**，并用 `exhaust-focus --evidence-ref <ID>` 显式引用。planning 时已经存在的 blocker、历史 negative evidence、重复读取或 timestamp-only evidence 不能作为零-candidate 关闭依据。guard 成功关闭后自动激活下一个 pending route（如有）。
 - `close-route` 同样受上述 gate 约束；ACTIVE route 不能通过 direct close 绕过 Focus/Hypothesis/Candidate。Pending route 若要在未激活前被 dismiss，也必须引用 plan 之后的新 evidence，而不能仅凭 plan 当时已经知道的事实。
 - 没有 pending route 时，controller 先执行一次 final re-plan；只有 final re-plan 仍为空且没有 OPEN hypothesis/focus/ACTIVE route，且所有会 materially change routing 的可取得 in-scope diagnostics 已完成或明确 unavailable，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。终态前 guard 还会审计本 Incumbent cycle 的 terminal routes：凡没有 candidate Result、也没有 auditable post-activation closure evidence 的 route，拒绝 exhaustion terminal。

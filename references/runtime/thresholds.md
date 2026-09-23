@@ -11,7 +11,7 @@ description: 提交前门槛的解释与读取规则；具体 limit 以当前 Al
 2. 平台当前文档：解释检查含义、region/delay/project 特殊项。
 3. 本文件：只解释 evidence/readiness/submission policy；不负责 repair 路由。
 
-不要用历史常数补造未返回的 status/limit。响应缺失或调用失败时标 evidence unknown，并按 controller 重试或阻塞。
+不要用历史常数补造未返回的 status/limit。响应缺失或调用失败时标 evidence unknown。Optimization candidate 的 poll/Result/check 短暂缺失由 reserved-candidate executor 内部有界恢复；只有明确 reconciliation/recovery boundary 才交回 controller。其它只读 refresh/终检若仍缺失则阻塞结论，不猜。
 
 ## Source conflict
 

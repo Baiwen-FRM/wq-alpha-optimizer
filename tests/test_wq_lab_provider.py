@@ -98,6 +98,24 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(baseline["result_evidence"]["response_complete"])
         self.assertIn("get_submission_check", baseline["result_evidence"]["source"])
 
+    def test_explicit_empty_dedicated_check_list_does_not_fall_back_to_detail_checks(self):
+        root = {
+            "alpha_id": "A1",
+            "type": "REGULAR",
+            "expressions": ["rank(close)"],
+            "settings": {"region": "GBR", "delay": 0, "universe": "TOP700"},
+            "metrics": {"SHARPE": 2.0},
+            "fields": [{"field_id": "close"}],
+            "details_raw": {
+                "is": {"checks": [{"name": "STALE_DETAIL_CHECK", "result": "FAIL"}]}
+            },
+            "submission_check_raw": {"is": {"checks": []}},
+        }
+        baseline = provider._baseline_from_root(root)
+        self.assertTrue(baseline["result_evidence"]["response_complete"])
+        self.assertEqual(baseline["result_evidence"]["checks"], [])
+        self.assertIn("get_submission_check", baseline["result_evidence"]["source"])
+
     def test_missing_dedicated_submission_check_is_not_marked_complete(self):
         root = {
             "alpha_id": "A1",
@@ -148,7 +166,7 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(evidence["authenticated"])
         self.assertIn("get_submission_check", evidence["source"])
 
-    def test_result_evidence_filters_none_metrics_and_waits_for_pending_checks(self):
+    def test_result_evidence_filters_none_metrics_and_preserves_pending_checks(self):
         class FakeWQ:
             @staticmethod
             def get_result(session, alpha_id):
@@ -175,8 +193,24 @@ class WQLabProviderTests(TestCase):
 
         evidence = provider.result_evidence_snapshot(object(), FakeWQ, "CHILD", "/simulations/S2")
         self.assertEqual(evidence["metrics"], {"sharpe": 2.15, "turnover": 0.2})
-        self.assertFalse(evidence["response_complete"])
+        self.assertTrue(evidence["response_complete"])
         self.assertEqual(evidence["checks"][0]["status"], "PENDING")
+
+    def test_explicit_empty_dedicated_check_list_is_a_complete_snapshot(self):
+        class FakeWQ:
+            @staticmethod
+            def get_result(session, alpha_id):
+                return {"id": alpha_id, "is": {"sharpe": 2.2, "fitness": 1.5}}
+
+            @staticmethod
+            def get_submission_check(session, alpha_id):
+                return {"is": {"checks": []}}
+
+        evidence = provider.result_evidence_snapshot(
+            object(), FakeWQ, "CHILD-EMPTY-CHECKS", "/simulations/S-empty"
+        )
+        self.assertTrue(evidence["response_complete"])
+        self.assertEqual(evidence["checks"], [])
 
     def test_result_evidence_warning_is_terminal_but_left_for_policy_classification(self):
         class FakeWQ:
