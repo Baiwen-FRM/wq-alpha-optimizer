@@ -178,6 +178,22 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(evidence["response_complete"])
         self.assertEqual(evidence["checks"][0]["status"], "PENDING")
 
+    def test_explicit_empty_dedicated_check_list_is_a_complete_snapshot(self):
+        class FakeWQ:
+            @staticmethod
+            def get_result(session, alpha_id):
+                return {"id": alpha_id, "is": {"sharpe": 2.2, "fitness": 1.5}}
+
+            @staticmethod
+            def get_submission_check(session, alpha_id):
+                return {"is": {"checks": []}}
+
+        evidence = provider.result_evidence_snapshot(
+            object(), FakeWQ, "CHILD-EMPTY-CHECKS", "/simulations/S-empty"
+        )
+        self.assertTrue(evidence["response_complete"])
+        self.assertEqual(evidence["checks"], [])
+
     def test_result_evidence_warning_is_terminal_but_left_for_policy_classification(self):
         class FakeWQ:
             @staticmethod
