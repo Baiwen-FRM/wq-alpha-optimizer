@@ -260,10 +260,25 @@ def _evaluate_done_alpha(
         (state.get("incumbent") or {}).get("result_evidence", {}),
     )
     if baseline_schema_missing:
+        check_facts = [
+            {
+                key: row.get(key)
+                for key in ("name", "status", "value", "limit")
+                if row.get(key) is not None
+            }
+            for row in (evidence.get("checks") or [])
+            if isinstance(row, dict)
+        ]
+        fact_summary = {
+            "alpha_id": alpha_id,
+            "metrics": evidence.get("metrics") or {},
+            "checks": check_facts,
+        }
         reason = (
             "Frozen hypothesis references observations that are not present in the "
             f"Incumbent snapshot schema: {', '.join(baseline_schema_missing)}. "
-            "The posted hypothesis cannot be rewritten after seeing Result."
+            "The posted hypothesis cannot be rewritten after seeing Result. "
+            f"Observed candidate snapshot={json.dumps(fact_summary, ensure_ascii=False, sort_keys=True)}"
         )
         evidence_ref = _failure_evidence(
             store,
