@@ -178,8 +178,8 @@ def _baseline_from_root(root: dict) -> dict:
     dedicated_check_payload = root.get("submission_check_raw") if isinstance(root.get("submission_check_raw"), dict) else {}
     dedicated_checks = _guard_checks(dedicated_check_payload)
     fallback_checks = _guard_checks(details)
-    checks = dedicated_checks or fallback_checks
     dedicated_complete = _dedicated_check_snapshot_present(dedicated_check_payload)
+    checks = dedicated_checks if dedicated_complete else fallback_checks
     source = (
         "BRAIN:wq_lib.get_result+get_submission_check"
         if dedicated_complete
