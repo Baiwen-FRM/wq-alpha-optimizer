@@ -2576,10 +2576,10 @@ class StateStore:
             "fingerprint": fingerprint,
         }
 
-    def fail_posted_hypothesis(self, hypothesis_id: str, evidence_ref: str, reason: str) -> Dict[str, Any]:
-        """Close a POSTED simulation that terminated without usable Alpha result evidence."""
+    def close_posted_hypothesis(self, hypothesis_id: str, evidence_ref: str, reason: str) -> Dict[str, Any]:
+        """Close an OPEN hypothesis after a confirmed POST when no valid evaluation is possible."""
         if not hypothesis_id.strip() or not evidence_ref.strip() or not reason.strip():
-            return {"ok": False, "reason": "POSTED_FAILURE_CONTRACT_REQUIRED"}
+            return {"ok": False, "reason": "POSTED_INCONCLUSIVE_CONTRACT_REQUIRED"}
         state = self.read()
         terminal = _terminal_rejection(state)
         if terminal:
@@ -2598,8 +2598,17 @@ class StateStore:
         evidence = state.get("evidence", {}).get(evidence_ref)
         if not evidence:
             return {"ok": False, "reason": "UNKNOWN_EVIDENCE_REF"}
-        if evidence.get("kind") != "SIMULATION_FAILURE" or evidence.get("subject") != hypothesis_id:
-            return {"ok": False, "reason": "SIMULATION_FAILURE_EVIDENCE_MISMATCH"}
+        kind = str(evidence.get("kind") or "")
+        dispositions = {
+            "SIMULATION_FAILURE": "POSTED_SIMULATION_FAILURE",
+            "RESULT_CONTRACT_FAILURE": "POSTED_RESULT_CONTRACT_FAILURE",
+        }
+        if kind not in dispositions or evidence.get("subject") != hypothesis_id:
+            return {
+                "ok": False,
+                "reason": "POSTED_INCONCLUSIVE_EVIDENCE_MISMATCH",
+                "evidence_kind": kind,
+            }
 
         fingerprint = hypothesis.get("candidate_fingerprint")
         if not fingerprint:
@@ -2612,9 +2621,10 @@ class StateStore:
                 "status": None if not simulation else simulation.get("status"),
             }
 
+        disposition = dispositions[kind]
         hypothesis["status"] = "INCONCLUSIVE"
         hypothesis["result"] = {
-            "disposition": "POSTED_SIMULATION_FAILURE",
+            "disposition": disposition,
             "reason": reason.strip(),
             "evidence_ref": evidence_ref,
             "simulation_id": simulation.get("simulation_id"),
@@ -2629,6 +2639,7 @@ class StateStore:
             "ok": True,
             "hypothesis_id": hypothesis_id,
             "status": "INCONCLUSIVE",
+            "disposition": disposition,
             "evidence_ref": evidence_ref,
             "fingerprint": fingerprint,
             "simulation_id": simulation.get("simulation_id"),
@@ -2883,7 +2894,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("begin-submission"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True)
     p = sub.add_parser("record"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--status", required=True); p.add_argument("--simulation-id")
     p = sub.add_parser("release"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--fingerprint", required=True); p.add_argument("--reason", required=True)
-    p = sub.add_parser("fail-posted-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
+    p = sub.add_parser("close-posted-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("evaluate"); p.add_argument("--candidate", required=True); p.add_argument("--result", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("promote"); p.add_argument("--candidate", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
 
@@ -2914,7 +2925,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "begin-submission": out = StateStore(args.state, args.root_alpha_id).begin_submission(args.fingerprint)
         elif args.cmd == "record": out = StateStore(args.state, args.root_alpha_id).record_transport(args.fingerprint, args.status, args.simulation_id)
         elif args.cmd == "release": out = StateStore(args.state, args.root_alpha_id).release_reservation(args.fingerprint, args.reason)
-        elif args.cmd == "fail-posted-hypothesis": out = StateStore(args.state, args.root_alpha_id).fail_posted_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
+        elif args.cmd == "close-posted-hypothesis": out = StateStore(args.state, args.root_alpha_id).close_posted_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
         elif args.cmd == "evaluate": out = StateStore(args.state, args.root_alpha_id).evaluate_result(_load_json_arg(args.candidate), _load_json_arg(args.result))
         else: out = StateStore(args.state, args.root_alpha_id).promote(_load_json_arg(args.candidate))
     except (ValueError, KeyError, json.JSONDecodeError) as exc:
