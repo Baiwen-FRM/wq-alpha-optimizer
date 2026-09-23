@@ -148,7 +148,7 @@ class WQLabProviderTests(TestCase):
         self.assertTrue(evidence["authenticated"])
         self.assertIn("get_submission_check", evidence["source"])
 
-    def test_result_evidence_filters_none_metrics_and_waits_for_pending_checks(self):
+    def test_result_evidence_filters_none_metrics_and_preserves_pending_checks(self):
         class FakeWQ:
             @staticmethod
             def get_result(session, alpha_id):
@@ -175,7 +175,7 @@ class WQLabProviderTests(TestCase):
 
         evidence = provider.result_evidence_snapshot(object(), FakeWQ, "CHILD", "/simulations/S2")
         self.assertEqual(evidence["metrics"], {"sharpe": 2.15, "turnover": 0.2})
-        self.assertFalse(evidence["response_complete"])
+        self.assertTrue(evidence["response_complete"])
         self.assertEqual(evidence["checks"][0]["status"], "PENDING")
 
     def test_result_evidence_warning_is_terminal_but_left_for_policy_classification(self):
