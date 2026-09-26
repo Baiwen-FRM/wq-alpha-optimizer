@@ -14,7 +14,6 @@ import contextlib
 import copy
 import io
 import json
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,29 +73,6 @@ def _select_fingerprint(state: dict[str, Any], requested: str | None) -> str:
             f"found {len(candidates)}"
         )
     return candidates[0]
-
-
-def _data_dir(state: dict[str, Any], fingerprint: str) -> Path | None:
-    run = state.get("run") if isinstance(state.get("run"), dict) else {}
-    run_id = str(run.get("run_id") or "").strip()
-    if not run_id:
-        return None
-    return guard.LOGS_DIR / ".data" / run_id / "candidates" / fingerprint
-
-
-def _write_json_atomic(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-        json.dump(value, handle, ensure_ascii=False, indent=2, default=str)
-        handle.write("\n")
-        temp = Path(handle.name)
-    temp.replace(path)
-
-
-def _persist(store: guard.StateStore, fingerprint: str, name: str, value: Any) -> None:
-    directory = _data_dir(store.read(), fingerprint)
-    if directory is not None:
-        _write_json_atomic(directory / name, value)
 
 
 def _response_summary(response: Any) -> dict[str, Any]:
@@ -215,7 +191,6 @@ def _evaluate_done_alpha(
             "error": str(exc),
             "resumable": True,
         }
-    _persist(store, fingerprint, "result_evidence.json", evidence)
 
     state = store.read()
     hypothesis_id = str(candidate.get("hypothesis_id") or "")
@@ -348,7 +323,6 @@ def _poll_posted(
 
     if not isinstance(outcome, dict):
         outcome = {"status": "unknown", "error": "wq_lib.simulate_single returned non-object"}
-    _persist(store, fingerprint, "simulation_outcome.json", outcome)
 
     status = str(outcome.get("status") or "").lower()
     alpha_id = str(outcome.get("alpha_id") or "")
@@ -420,7 +394,6 @@ def _submit_reserved(
         }
 
     payload = _candidate_payload(candidate)
-    _persist(store, fingerprint, "candidate_payload.json", payload)
     try:
         response = wq._start_simulation(session, payload)
     except Exception as exc:
@@ -442,7 +415,6 @@ def _submit_reserved(
         try:
             posted = store.record_transport(fingerprint, "POSTED", location)
         except Exception as exc:
-            _persist(store, fingerprint, "submission_response.json", summary)
             return {
                 "ok": False,
                 "stage": "POST_RECORD_EXCEPTION",
@@ -452,7 +424,6 @@ def _submit_reserved(
                 "recovery_required": True,
                 "recover_location": location,
             }
-        _persist(store, fingerprint, "submission_response.json", summary)
         if not posted.get("ok"):
             return {
                 "ok": False,
@@ -467,7 +438,6 @@ def _submit_reserved(
 
     if http_status == 429:
         limited = store.record_transport(fingerprint, "HTTP_429")
-        _persist(store, fingerprint, "submission_response.json", summary)
         return {
             "ok": False,
             "stage": "HTTP_429",
@@ -479,7 +449,6 @@ def _submit_reserved(
 
     if http_status == 201 or (isinstance(http_status, int) and http_status >= 500):
         ambiguous = store.record_transport(fingerprint, "AMBIGUOUS_POST")
-        _persist(store, fingerprint, "submission_response.json", summary)
         return {
             "ok": False,
             "stage": "AMBIGUOUS_POST",
@@ -494,7 +463,6 @@ def _submit_reserved(
         f"HTTP {http_status}; body={summary['body'][:500]}"
     )
     released = store.release_reservation(fingerprint, reason)
-    _persist(store, fingerprint, "submission_response.json", summary)
     hypothesis_id = str(candidate.get("hypothesis_id") or "")
     evidence_ref = _failure_evidence(
         store,
