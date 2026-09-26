@@ -2835,6 +2835,26 @@ class StateStore:
         self._write(state)
         return {"promoted": True, "previous_incumbent": previous, "incumbent_alpha_id": snapshot["alpha_id"], "complexity_delta_vs_root": pre.get("complexity_delta_vs_root")}
 
+    def set_run_phase_status(self, status: str, detail: str | None = None) -> Dict[str, Any]:
+        """Update only the nonterminal run phase marker used by bootstrap recovery."""
+        status = str(status).upper()
+        if status not in {"RUNNING", "RECOVERY_REQUIRED"}:
+            return {"ok": False, "reason": "RUN_PHASE_STATUS_NOT_ALLOWED", "status": status}
+        state = self.read()
+        run = state.get("run")
+        if not isinstance(run, dict):
+            return {"ok": False, "reason": "RUN_NOT_INITIALIZED"}
+        if run.get("status") in RUN_TERMINAL_STATUSES:
+            return {"ok": False, "reason": "RUN_ALREADY_TERMINAL", "status": run.get("status")}
+        run["status"] = status
+        if detail:
+            run["phase_detail"] = str(detail)
+        else:
+            run.pop("phase_detail", None)
+        state["run"] = run
+        self._write(state)
+        return {"ok": True, "status": status, "run_id": run.get("run_id")}
+
     def finish_run(self, status: str, reason: str) -> Dict[str, Any]:
         status = status.upper()
         if status not in RUN_TERMINAL_STATUSES or not reason.strip():
@@ -2913,6 +2933,11 @@ class StateStore:
 
 
 def start_run(root_alpha_id: str) -> Dict[str, Any]:
+    """Create a deliberately fresh run.
+
+    Normal bootstrap must use start_or_resume(); this function remains the
+    explicit low-level escape hatch for callers that intentionally want a new run.
+    """
     log_path, state_path, run_id = _canonical_run_paths(root_alpha_id)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -2928,7 +2953,57 @@ def start_run(root_alpha_id: str) -> Dict[str, Any]:
         "state_path": str(state_path.resolve()),
         "log_path": str(log_path.resolve()),
         "log_exists": log_path.exists(),
+        "resumed": False,
     }
+
+
+def start_or_resume(root_alpha_id: str) -> Dict[str, Any]:
+    """Resume the newest nonterminal run for this Root, otherwise create one.
+
+    This gives one user optimization task one persistent run across bootstrap
+    retries and controller restarts. Historical terminal runs are never reopened.
+    """
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = f"{_safe_component(root_alpha_id)}_"
+    candidates: list[tuple[str, Path, Dict[str, Any]]] = []
+    for path in STATE_DIR.glob(f"{prefix}*.json"):
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if str(state.get("root_alpha_id") or "") != str(root_alpha_id):
+            continue
+        run = state.get("run")
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "RUNNING").upper()
+        if status in RUN_TERMINAL_STATUSES:
+            continue
+        candidates.append((str(run.get("started_at") or ""), path, state))
+
+    if candidates:
+        _started_at, state_path, _snapshot = sorted(candidates, key=lambda item: item[0])[-1]
+        store = StateStore(state_path, root_alpha_id)
+        state = store.read()
+        run = state.get("run") or {}
+        run["status"] = "RUNNING"
+        run.pop("phase_detail", None)
+        state["run"] = run
+        state, _ = store._ensure_run_log(state)
+        store._write(state)
+        log_path = Path(str(run["log_path"])).expanduser().resolve()
+        return {
+            "ok": True,
+            "root_alpha_id": str(root_alpha_id),
+            "run_id": str(run["run_id"]),
+            "state_path": str(state_path.resolve()),
+            "log_path": str(log_path),
+            "log_exists": log_path.exists(),
+            "resumed": True,
+        }
+
+    return start_run(root_alpha_id)
 
 
 def _load_text_arg(path: str | None) -> str:
@@ -2949,6 +3024,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
 
     p = sub.add_parser("inspect-root"); p.add_argument("expression")
     p = sub.add_parser("start-run"); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("start-or-resume"); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("init"); p.add_argument("--baseline", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("append-log"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--section", required=True); p.add_argument("--text-file")
     p = sub.add_parser("update-dashboard"); p.add_argument("--dashboard", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
@@ -2978,6 +3054,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     try:
         if args.cmd == "inspect-root": out = inspect_root(args.expression)
         elif args.cmd == "start-run": out = start_run(args.root_alpha_id)
+        elif args.cmd == "start-or-resume": out = start_or_resume(args.root_alpha_id)
         elif args.cmd == "init": out = StateStore(args.state, args.root_alpha_id).initialize(_load_json_arg(args.baseline))
         elif args.cmd == "append-log": out = StateStore(args.state, args.root_alpha_id).append_log(args.section, _load_text_arg(args.text_file))
         elif args.cmd == "update-dashboard": out = StateStore(args.state, args.root_alpha_id).update_dashboard(_load_json_arg(args.dashboard))
