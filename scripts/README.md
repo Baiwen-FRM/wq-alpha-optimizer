@@ -60,7 +60,7 @@ Normal Root intake is a single command:
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-It performs local WQ Lab capability preflight, starts or resumes the canonical nonterminal run for the Root, executes WQ Lab intake in memory, initializes the Guard, and updates the live Dashboard. Normal execution persists only the canonical Markdown log and Guard state; raw/derived intake projections are not archived as separate files. The controller should not manually reorder these steps.
+It performs local WQ Lab capability preflight, starts or resumes the canonical nonterminal run for the Root, executes WQ Lab intake in memory, initializes the Guard, and updates the live Dashboard. Normal execution persists exactly one Markdown file; the compressed machine state is embedded inside that file for safe resume. Raw/derived intake projections are not archived separately. The controller should not manually reorder these steps.
 
 ## WQ Lab provider
 
