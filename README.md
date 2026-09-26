@@ -59,7 +59,7 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - REFUTED applies to the frozen hypothesis/payload, not automatically to the whole mechanism family;
 - after promotion the plan becomes stale and the optimizer re-diagnoses from the improved Incumbent, enabling bounded stepwise progress without dense parameter scans;
 - every canonical run MD now opens with a live Dashboard: expression/settings, Result/checks, field metadata, visualization/recordsets, optional SVG charts, and candidate progression;
-- dashboard charts are generated with the Python standard library only and remain local under ignored run-log assets.
+- visualization diagnostics are compacted into deterministic inline snapshots in the canonical Markdown log; normal runs do not create chart asset files.
 
 
 ## v3.5.0 local WQ Lab provider
@@ -77,8 +77,8 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 
 - normal Root intake is now one command: `scripts/bootstrap_run.py --alpha-id <ID>`;
 - the controller no longer manually chains run creation, WQ Lab intake, Guard initialization and Dashboard update;
-- every run persists raw intake, Guard baseline projection and Dashboard projection under `logs/.data/<run_id>/`;
-- WQ Lab capability mismatch fails before run creation; BRAIN/auth intake failure after run creation is written to the canonical audit log and stops the bootstrap;
+- normal runs persist only the canonical Markdown log plus the Guard state needed for safe resume; raw intake, baseline/dashboard projections and recordsets are processed in memory and are not archived as parallel `.data` snapshots;
+- WQ Lab capability mismatch fails before run creation; retryable intake failure marks the existing run `RECOVERY_REQUIRED`, and the next bootstrap for the same Root resumes that nonterminal run instead of creating another log;
 - low-level provider commands remain available only for debugging/recovery, preserving one stable normal execution order.
 
 
@@ -128,5 +128,5 @@ A deterministic candidate preflight failure no longer strands an OPEN hypothesis
 - current Result + dedicated submission checks are fetched after completion and passed to Guard `evaluate_result`;
 - only machine-`SUPPORTED` results are automatically promoted; REFUTED/INCONCLUSIVE remain unpromoted;
 - explicit pre-POST rejection and terminal posted-simulation failure become auditable INCONCLUSIVE states rather than fake performance Results;
-- candidate payload, submission response, simulation outcome and result evidence are persisted under the run's canonical `logs/.data/.../candidates/` directory;
+- candidate spec, transport state, simulation location and evaluated Result evidence live in the single Guard state ledger; no per-candidate artifact directory is created;
 - WQ Lab is unchanged; the executor uses its existing immediate submission compatibility helper and Location-resume simulation path.
