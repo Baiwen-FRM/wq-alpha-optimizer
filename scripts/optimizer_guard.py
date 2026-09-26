@@ -99,7 +99,7 @@ def _render_run_log(state: Dict[str, Any]) -> str:
     return text
 
 _STATE_MARKER_RE = re.compile(
-    r"\\n?<!-- WQ_OPTIMIZER_STATE_V1\\n(?P<payload>[A-Za-z0-9+/=\\n]+)\\nWQ_OPTIMIZER_STATE_V1 -->\\s*$",
+    r"\n?<!-- WQ_OPTIMIZER_STATE_V1\n(?P<payload>[A-Za-z0-9+/=\n]+)\nWQ_OPTIMIZER_STATE_V1 -->\s*$",
     re.MULTILINE,
 )
 
