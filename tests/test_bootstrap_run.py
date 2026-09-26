@@ -97,7 +97,9 @@ class BootstrapRunTests(TestCase):
         )
 
         self.assertFalse((self.logs / ".data").exists())
+        self.assertFalse((self.logs / ".state").exists())
         self.assertFalse(result["resumed"])
+        self.assertEqual(result["state_path"], result["log_path"])
 
         store = guard.StateStore(Path(result["state_path"]), "ROOT")
         state = store.read()
@@ -150,8 +152,10 @@ class BootstrapRunTests(TestCase):
         self.assertEqual(first["state_path"], second["state_path"])
         self.assertEqual(first["log_path"], second["log_path"])
         self.assertTrue(second["resumed"])
+        self.assertEqual(second["state_path"], second["log_path"])
         self.assertEqual(len(list(self.logs.glob("ROOT_*.md"))), 1)
         self.assertFalse((self.logs / ".data").exists())
+        self.assertFalse((self.logs / ".state").exists())
 
 
 if __name__ == "__main__":
