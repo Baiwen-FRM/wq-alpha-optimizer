@@ -37,6 +37,6 @@ metadata:
 
 正式路由入口是 `references/index.md`：planning 可以识别多个 evidence-supported route/owner，但执行时只加载当前 active route 的一个 Primary owner；不要预加载全部 optimization references。
 
-Expression/settings、Result/checks、used-field metadata 与 visualization/recordsets 四类必需事实都走单入口 deterministic bootstrap；controller 不再手工串联 start-run / intake / init / dashboard。Bootstrap 后先做 evidence + method synthesis，再形成 route；不得把 intake、synthesis、Profile/Plan 当成正常终点。
+Expression/settings、Result/checks、used-field metadata 与 visualization/recordsets 四类必需事实都走单入口 deterministic bootstrap；bootstrap 对同一 Root 的非终态任务使用 start-or-resume，controller 不再手工串联 start-run / intake / init / dashboard。四类原始事实用于当次判断，但正常持久层只保留 canonical MD 与可安全续跑所需的 Guard state，不另存 raw/derived `.data` artifacts。Bootstrap 后先做 evidence + method synthesis，再形成 route；不得把 intake、synthesis、Profile/Plan 当成正常终点。
 
 真实 FE 查询、checks、field metadata、recordsets、correlation 和 simulation 使用本地已认证的 WQ Lab/`wq_lib`，接口边界见 `references/runtime/wq-lab-provider.md`。正常路径不再静默切回 CNHKMCP。Python Alpha 的转换、实现和 Python 专属回测由 `wq-python-alpha` 负责。
