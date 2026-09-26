@@ -11,23 +11,6 @@ import optimizer_guard as guard
 import wq_lab_provider as provider
 
 
-def _json_default(value: Any):
-    if hasattr(value, "to_dict"):
-        try:
-            return value.to_dict(orient="records")
-        except TypeError:
-            return value.to_dict()
-    return str(value)
-
-
-def _write_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2, default=_json_default) + "\n",
-        encoding="utf-8",
-    )
-
-
 def _append_bootstrap_note(store: guard.StateStore, *, status: str, detail: str) -> None:
     store.append_log(
         "BOOTSTRAP",
@@ -42,7 +25,7 @@ def bootstrap_run(
     discovery_sleep_seconds: float = 2.0,
 ) -> dict[str, Any]:
     # Local compatibility check is allowed before the run starts because it
-    # performs no BRAIN I/O.
+    # performs no BRAIN I/O and should not create a failed run artifact.
     try:
         provider._load_wq_lib()
     except Exception as exc:
@@ -53,19 +36,14 @@ def bootstrap_run(
             "error": str(exc),
         }
 
-    started = guard.start_run(alpha_id)
+    started = guard.start_or_resume(alpha_id)
     if not started.get("ok"):
-        return {"ok": False, "stage": "START_RUN", "detail": started}
+        return {"ok": False, "stage": "START_OR_RESUME", "detail": started}
 
     state_path = Path(str(started["state_path"]))
     log_path = Path(str(started["log_path"]))
     run_id = str(started["run_id"])
     store = guard.StateStore(state_path, alpha_id)
-
-    data_dir = log_path.parent / ".data" / run_id
-    raw_path = data_dir / "intake.json"
-    baseline_path = data_dir / "baseline.json"
-    dashboard_path = data_dir / "dashboard.json"
 
     try:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -75,62 +53,46 @@ def bootstrap_run(
                 discovery_sleep_seconds=discovery_sleep_seconds,
             )
     except Exception as exc:
-        _append_bootstrap_note(store, status="FAILED", detail=f"WQ Lab intake failed: {exc}")
+        detail = f"WQ Lab intake failed: {exc}"
+        store.set_run_phase_status("RECOVERY_REQUIRED", detail)
+        _append_bootstrap_note(store, status="RECOVERY_REQUIRED", detail=detail)
         return {
             "ok": False,
             "stage": "WQ_LAB_INTAKE",
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
-            "error": str(exc),
-        }
-
-    raw_evidence = {
-        "root": intake.get("root"),
-        "visualization": intake.get("visualization"),
-    }
-    try:
-        _write_json(raw_path, raw_evidence)
-        _write_json(baseline_path, intake.get("baseline"))
-        _write_json(dashboard_path, intake.get("dashboard"))
-    except Exception as exc:
-        _append_bootstrap_note(store, status="FAILED", detail=f"Snapshot persistence failed: {exc}")
-        return {
-            "ok": False,
-            "stage": "SNAPSHOT_PERSISTENCE",
-            "run_id": run_id,
-            "state_path": str(state_path),
-            "log_path": str(log_path),
+            "resumed": bool(started.get("resumed")),
             "error": str(exc),
         }
 
     initialized = store.initialize(intake["baseline"])
     if not initialized.get("initialized"):
-        _append_bootstrap_note(store, status="FAILED", detail=f"Guard init failed: {initialized}")
+        detail = f"Guard init failed: {initialized}"
+        store.set_run_phase_status("RECOVERY_REQUIRED", detail)
+        _append_bootstrap_note(store, status="RECOVERY_REQUIRED", detail=detail)
         return {
             "ok": False,
             "stage": "GUARD_INIT",
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
-            "raw_intake_path": str(raw_path),
-            "baseline_path": str(baseline_path),
-            "dashboard_path": str(dashboard_path),
+            "resumed": bool(started.get("resumed")),
             "detail": initialized,
         }
 
     dashboard = store.update_dashboard(intake["dashboard"])
     if not dashboard.get("ok"):
-        _append_bootstrap_note(store, status="FAILED", detail=f"Dashboard update failed: {dashboard}")
+        detail = f"Dashboard update failed: {dashboard}"
+        store.set_run_phase_status("RECOVERY_REQUIRED", detail)
+        _append_bootstrap_note(store, status="RECOVERY_REQUIRED", detail=detail)
         return {
             "ok": False,
             "stage": "DASHBOARD_UPDATE",
             "run_id": run_id,
             "state_path": str(state_path),
             "log_path": str(log_path),
-            "raw_intake_path": str(raw_path),
-            "baseline_path": str(baseline_path),
-            "dashboard_path": str(dashboard_path),
+            "resumed": bool(started.get("resumed")),
             "detail": dashboard,
         }
 
@@ -142,8 +104,9 @@ def bootstrap_run(
         store,
         status="READY",
         detail=(
-            f"Deterministic Root intake completed via local WQ Lab. "
-            f"Raw snapshot: {raw_path.name}; recordsets discovered: {len(recordsets)}."
+            "Deterministic Root intake completed via local WQ Lab in memory; "
+            f"recordsets discovered: {len(recordsets)}. "
+            "No raw/derived intake snapshots were persisted."
         ),
     )
 
@@ -154,15 +117,12 @@ def bootstrap_run(
         "run_id": run_id,
         "state_path": str(state_path),
         "log_path": str(log_path),
-        "raw_intake_path": str(raw_path),
-        "baseline_path": str(baseline_path),
-        "dashboard_path": str(dashboard_path),
         "diagnostic_alpha_id": visualization.get("diagnostic_alpha_id"),
         "recordset_count": len(recordsets),
         "initialized": initialized,
         "dashboard_updated": True,
+        "resumed": bool(started.get("resumed")),
     }
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
