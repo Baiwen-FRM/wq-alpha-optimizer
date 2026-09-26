@@ -77,7 +77,7 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 
 - normal Root intake is now one command: `scripts/bootstrap_run.py --alpha-id <ID>`;
 - the controller no longer manually chains run creation, WQ Lab intake, Guard initialization and Dashboard update;
-- normal runs persist only the canonical Markdown log plus the Guard state needed for safe resume; raw intake, baseline/dashboard projections and recordsets are processed in memory and are not archived as parallel `.data` snapshots;
+- normal runs persist exactly one canonical Markdown file. The Guard machine state needed for safe resume is compressed into a hidden block inside that same Markdown file; no sidecar state, `.data`, or asset files are created. Raw intake, baseline/dashboard projections and recordsets are processed in memory.
 - WQ Lab capability mismatch fails before run creation; retryable intake failure marks the existing run `RECOVERY_REQUIRED`, and the next bootstrap for the same Root resumes that nonterminal run instead of creating another log;
 - low-level provider commands remain available only for debugging/recovery, preserving one stable normal execution order.
 
