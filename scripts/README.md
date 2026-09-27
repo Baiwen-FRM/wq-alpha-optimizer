@@ -38,7 +38,7 @@ After mandatory intake evidence is registered, use:
 python3 scripts/mechanism_synthesis.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The script creates a deterministic blocker/enhancement-method-family/evidence scaffold. For blocker-free work, pass `--enhancement <TARGET> <OWNER>` (repeatable). It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required when claiming an empty plan/exhaustion, including enhancement targets already entered in the current Incumbent cycle.
+The script creates a deterministic blocker/enhancement-method-family/evidence scaffold. For blocker-free work, pass `--enhancement <TARGET> <OWNER>` (repeatable); enhancement objectives already entered in the current Incumbent cycle are also recovered automatically. The scaffold includes structured `candidate_history` and `enhancement_progress`, so the next planning pass can reason jointly over all conclusive Results and see which catalog method families have never been routed. It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; any same-Incumbent empty plan requires full catalog coverage for entered enhancement objectives, including STALE re-profiles after fresh Result/check refresh.
 
 ## Reserved candidate executor
 
