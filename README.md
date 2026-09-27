@@ -30,7 +30,7 @@ Run start → Root snapshot → Diagnose/Profile → Ordered Plan
 → Result → Promotion or route closure
 → fresh Incumbent Result/check refresh when needed
 → re-profile/re-plan
-→ SUBMISSION_READY / SUCCESS / one-final-replan exhaustion
+→ SUBMISSION_READY / SUCCESS / evidence-fresh exhaustion
    / USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE
 ```
 
