@@ -3105,7 +3105,10 @@ class StateStore:
             observed = _parse_iso(result_evidence["observed_at"])
             posted = _parse_iso(transport["posted_at"])
             metrics = _normalize_metrics(result_evidence["metrics"])
-            checks = _normalize_checks(result_evidence["checks"])
+            checks = _inherit_warning_policy(
+                (state.get("incumbent") or {}).get("result_evidence", {}).get("checks"),
+                result_evidence["checks"],
+            )
         except ValueError as exc:
             return {"ok": False, "reason": "RESULT_EVIDENCE_CONTRACT", "detail": str(exc)}
         if observed < posted:
@@ -3302,6 +3305,8 @@ class StateStore:
                 if not readiness.get("ready"):
                     return {"ok": False, "reason": readiness.get("reason"), "readiness": readiness}
                 if plan:
+                    if plan.get("status") == "STALE":
+                        return {"ok": False, "reason": "PLAN_STALE_REPLAN_REQUIRED"}
                     if plan.get("status") == "ACTIVE" or any(
                         route.get("status") == "ACTIVE" for route in plan.get("routes", [])
                     ):
