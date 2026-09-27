@@ -10,7 +10,7 @@ CLI：
 python3 scripts/optimizer_guard.py --help
 ```
 
-`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Optional chart payloads are written as stdlib-only SVG files under `logs/assets/` and referenced relatively from the run MD; no plotting dependency is required.
+`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Chart payloads are reduced to compact deterministic snapshots and rendered inline in the Markdown log; no separate chart assets are written.
 
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
@@ -60,7 +60,7 @@ Normal Root intake is a single command:
 python3 scripts/bootstrap_run.py --alpha-id <ID>
 ```
 
-It performs local WQ Lab capability preflight, creates the canonical run, executes WQ Lab intake, persists `logs/.data/<run_id>/{intake,baseline,dashboard}.json`, initializes the Guard, and updates the live Dashboard. The controller should not manually reorder these steps.
+It performs local WQ Lab capability preflight, starts or resumes the canonical nonterminal run for the Root, executes WQ Lab intake in memory, initializes the Guard, and updates the live Dashboard. Normal execution persists exactly one Markdown file; the compressed machine state is embedded inside that file for safe resume. Raw/derived intake projections are not archived separately. The controller should not manually reorder these steps.
 
 ## WQ Lab provider
 

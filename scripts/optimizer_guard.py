@@ -20,12 +20,14 @@ machine-auditable and internally consistent.
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
 import os
 import re
 import tempfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable
@@ -38,7 +40,7 @@ LOCKED_SCOPE_KEYS = {"region", "delay", "universe", "instrumenttype"}
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 LOGS_DIR = SKILL_ROOT / "logs"
-STATE_DIR = LOGS_DIR / ".state"
+STATE_DIR = LOGS_DIR  # legacy compatibility alias; normal runtime has no sidecar state directory
 MECHANISM_CATALOG_PATH = SKILL_ROOT / "references" / "runtime" / "mechanism-catalog.json"
 
 SYNTHESIS_ACTIONABLE = {"ACTIONABLE", "PLAUSIBLE_PROBE"}
@@ -60,7 +62,10 @@ def _run_stamp() -> str:
 def _canonical_run_paths(root_alpha_id: str, stamp: str | None = None) -> tuple[Path, Path, str]:
     stamp = stamp or _run_stamp()
     run_id = f"{_safe_component(root_alpha_id)}_{stamp}"
-    return LOGS_DIR / f"{run_id}.md", STATE_DIR / f"{run_id}.json", run_id
+    log_path = LOGS_DIR / f"{run_id}.md"
+    # The state path intentionally aliases the Markdown file. Machine state is
+    # compressed into a hidden block inside the canonical run log.
+    return log_path, log_path, run_id
 
 
 def _initial_log_text(root_alpha_id: str, run_id: str, started_at: str, status: str = "RUNNING") -> str:
@@ -92,6 +97,36 @@ def _render_run_log(state: Dict[str, Any]) -> str:
             text += f"_Recorded at: {at}_\n\n"
         text += body + "\n"
     return text
+
+_STATE_MARKER_RE = re.compile(
+    r"\n?<!-- WQ_OPTIMIZER_STATE_V1\n(?P<payload>[A-Za-z0-9+/=\n]+)\nWQ_OPTIMIZER_STATE_V1 -->\s*$",
+    re.MULTILINE,
+)
+
+
+def _encode_embedded_state(state: Dict[str, Any]) -> str:
+    raw = _canonical_json(state).encode("utf-8")
+    payload = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
+    return f"\n<!-- WQ_OPTIMIZER_STATE_V1\n{payload}\nWQ_OPTIMIZER_STATE_V1 -->\n"
+
+
+def _decode_embedded_state(text: str) -> Dict[str, Any] | None:
+    match = _STATE_MARKER_RE.search(text)
+    if not match:
+        return None
+    payload = "".join(match.group("payload").split())
+    try:
+        raw = zlib.decompress(base64.b64decode(payload))
+        value = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"INVALID_EMBEDDED_STATE: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("INVALID_EMBEDDED_STATE: root must be an object")
+    return value
+
+
+def _render_run_file(state: Dict[str, Any]) -> str:
+    return _render_run_log(state).rstrip() + "\n" + _encode_embedded_state(state)
 
 HYPOTHESIS_FINAL = {"SUPPORTED", "REFUTED", "INCONCLUSIVE", "WITHDRAWN"}
 FOCUS_TYPES = {"DEFECT", "ENHANCEMENT"}
@@ -1414,9 +1449,11 @@ class StateStore:
     def __init__(self, path: Path | str, root_alpha_id: str):
         self.path = Path(path)
         self.root_alpha_id = str(root_alpha_id)
-        if not self.path.exists():
+        # Markdown-backed runtime state is created only after run metadata is
+        # known, so an empty placeholder file is never emitted.
+        if not self.path.exists() and self.path.suffix.lower() != ".md":
             self._write(self._initial_state())
-        else:
+        elif self.path.exists():
             state = self.read()
             existing = state.get("root_alpha_id")
             if existing and str(existing) != self.root_alpha_id:
@@ -1451,7 +1488,13 @@ class StateStore:
     def read(self) -> Dict[str, Any]:
         if not self.path.exists():
             return self._initial_state()
-        state = json.loads(self.path.read_text(encoding="utf-8"))
+        text = self.path.read_text(encoding="utf-8")
+        if self.path.suffix.lower() == ".md":
+            state = _decode_embedded_state(text)
+            if state is None:
+                return self._initial_state()
+        else:
+            state = json.loads(text)
         state.setdefault("_state_revision", 0)
         if "planning_contract" not in state:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v2"
@@ -1533,7 +1576,6 @@ class StateStore:
         log_path = Path(str(state["run"]["log_path"])).expanduser().resolve()
         log_path.parent.mkdir(parents=True, exist_ok=True)
         if not log_path.exists():
-            log_path.write_text(_render_run_log(state), encoding="utf-8")
             created = True
         return state, created
 
@@ -1546,7 +1588,6 @@ class StateStore:
         state.setdefault("log_entries", []).append(entry)
         self._write(state)
         log_path = Path(state["run"]["log_path"])
-        log_path.write_text(_render_run_log(state), encoding="utf-8")
         return {"ok": True, "log_path": str(log_path), "log_created_or_recreated": created, "entry_count": len(state["log_entries"])}
 
     def update_dashboard(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1558,7 +1599,6 @@ class StateStore:
             return {"ok": False, "reason": "DASHBOARD_CONTRACT", "detail": str(exc)}
         self._write(state)
         log_path = Path(state["run"]["log_path"])
-        log_path.write_text(_render_run_log(state), encoding="utf-8")
         return {
             "ok": True,
             "log_path": str(log_path),
@@ -1567,54 +1607,67 @@ class StateStore:
         }
 
     def _write(self, state: Dict[str, Any]) -> None:
-        """Atomic compare-and-swap write.
-
-        The optimizer may be invoked by multiple controller/tool calls in one
-        run. A plain atomic replace prevents torn JSON but does not prevent a
-        stale reader from silently overwriting a newer decision. Serialize the
-        replace with a file lock and reject stale snapshots instead.
-        """
+        """Atomic compare-and-swap write for JSON tests or embedded-MD runtime."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.path.with_name(self.path.name + ".lock")
         lock_path.touch(exist_ok=True)
         expected_revision = int(state.get("_state_revision", 0))
 
-        with lock_path.open("r+") as lock_fh:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-            try:
-                current_revision = 0
-                if self.path.exists():
-                    current = json.loads(self.path.read_text(encoding="utf-8"))
-                    current_revision = int(current.get("_state_revision", 0))
-                if current_revision != expected_revision:
-                    raise ValueError(
-                        "STATE_WRITE_CONFLICT: state changed after read; "
-                        f"expected revision {expected_revision}, found {current_revision}. "
-                        "Re-read state and retry the intended transition serially."
-                    )
-
-                next_state = _copy_json(state)
-                next_state["_state_revision"] = expected_revision + 1
-                fd, tmp = tempfile.mkstemp(
-                    prefix=self.path.name + ".",
-                    suffix=".tmp",
-                    dir=str(self.path.parent),
-                )
+        try:
+            with lock_path.open("r+") as lock_fh:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
                 try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                        json.dump(next_state, fh, ensure_ascii=False, sort_keys=True, indent=2)
-                        fh.flush()
-                        os.fsync(fh.fileno())
-                    os.replace(tmp, self.path)
-                    state["_state_revision"] = expected_revision + 1
-                    run = state.get("run") or {}
-                    if run.get("log_path"):
-                        Path(str(run["log_path"])).write_text(_render_run_log(state), encoding="utf-8")
+                    current_revision = 0
+                    if self.path.exists():
+                        current_text = self.path.read_text(encoding="utf-8")
+                        if self.path.suffix.lower() == ".md":
+                            current = _decode_embedded_state(current_text)
+                        else:
+                            current = json.loads(current_text)
+                        if isinstance(current, dict):
+                            current_revision = int(current.get("_state_revision", 0))
+                    if current_revision != expected_revision:
+                        raise ValueError(
+                            "STATE_WRITE_CONFLICT: state changed after read; "
+                            f"expected revision {expected_revision}, found {current_revision}. "
+                            "Re-read state and retry the intended transition serially."
+                        )
+
+                    next_state = _copy_json(state)
+                    next_state["_state_revision"] = expected_revision + 1
+                    if self.path.suffix.lower() == ".md":
+                        content = _render_run_file(next_state)
+                    else:
+                        content = json.dumps(next_state, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+                    fd, tmp = tempfile.mkstemp(
+                        prefix=self.path.name + ".",
+                        suffix=".tmp",
+                        dir=str(self.path.parent),
+                    )
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                            fh.write(content)
+                            fh.flush()
+                            os.fsync(fh.fileno())
+                        os.replace(tmp, self.path)
+                        state["_state_revision"] = expected_revision + 1
+                        # Legacy JSON-backed tests may still reference a separate
+                        # human log. Runtime Markdown-backed state is already the log.
+                        run = state.get("run") or {}
+                        if self.path.suffix.lower() != ".md" and run.get("log_path"):
+                            Path(str(run["log_path"])).write_text(_render_run_log(state), encoding="utf-8")
+                    finally:
+                        if os.path.exists(tmp):
+                            os.unlink(tmp)
                 finally:
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
-            finally:
-                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        finally:
+            # Lock files are transient synchronization primitives, never runtime artifacts.
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def initialize(self, baseline: Dict[str, Any]) -> Dict[str, Any]:
         snapshot = _snapshot_from_json(baseline, self.root_alpha_id)
@@ -1637,7 +1690,6 @@ class StateStore:
             "visualization": {},
         }
         self._write(state)
-        Path(state["run"]["log_path"]).write_text(_render_run_log(state), encoding="utf-8")
         return {"initialized": True, "already_initialized": False, "root_alpha_id": self.root_alpha_id, "incumbent_alpha_id": snapshot["alpha_id"], "allowed_fields": snapshot["fields"], "log_path": state["run"]["log_path"], "log_created_or_recreated": log_created}
 
     def refresh_incumbent_result(self, result_evidence: Dict[str, Any]) -> Dict[str, Any]:
@@ -2835,6 +2887,26 @@ class StateStore:
         self._write(state)
         return {"promoted": True, "previous_incumbent": previous, "incumbent_alpha_id": snapshot["alpha_id"], "complexity_delta_vs_root": pre.get("complexity_delta_vs_root")}
 
+    def set_run_phase_status(self, status: str, detail: str | None = None) -> Dict[str, Any]:
+        """Update only the nonterminal run phase marker used by bootstrap recovery."""
+        status = str(status).upper()
+        if status not in {"RUNNING", "RECOVERY_REQUIRED"}:
+            return {"ok": False, "reason": "RUN_PHASE_STATUS_NOT_ALLOWED", "status": status}
+        state = self.read()
+        run = state.get("run")
+        if not isinstance(run, dict):
+            return {"ok": False, "reason": "RUN_NOT_INITIALIZED"}
+        if run.get("status") in RUN_TERMINAL_STATUSES:
+            return {"ok": False, "reason": "RUN_ALREADY_TERMINAL", "status": run.get("status")}
+        run["status"] = status
+        if detail:
+            run["phase_detail"] = str(detail)
+        else:
+            run.pop("phase_detail", None)
+        state["run"] = run
+        self._write(state)
+        return {"ok": True, "status": status, "run_id": run.get("run_id")}
+
     def finish_run(self, status: str, reason: str) -> Dict[str, Any]:
         status = status.upper()
         if status not in RUN_TERMINAL_STATUSES or not reason.strip():
@@ -2883,7 +2955,6 @@ class StateStore:
         run["end_reason"] = reason.strip()
         state["run"] = run
         self._write(state)
-        Path(run["log_path"]).write_text(_render_run_log(state), encoding="utf-8")
         return {"ok": True, "status": status, "run": run}
 
     def summary(self) -> Dict[str, Any]:
@@ -2913,9 +2984,13 @@ class StateStore:
 
 
 def start_run(root_alpha_id: str) -> Dict[str, Any]:
+    """Create a deliberately fresh run.
+
+    Normal bootstrap must use start_or_resume(); this function remains the
+    explicit low-level escape hatch for callers that intentionally want a new run.
+    """
     log_path, state_path, run_id = _canonical_run_paths(root_alpha_id)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
     store = StateStore(state_path, root_alpha_id)
     state = store.read()
     state["run"] = {"run_id": run_id, "started_at": _now_iso(), "status": "RUNNING", "log_path": str(log_path.resolve())}
@@ -2928,7 +3003,56 @@ def start_run(root_alpha_id: str) -> Dict[str, Any]:
         "state_path": str(state_path.resolve()),
         "log_path": str(log_path.resolve()),
         "log_exists": log_path.exists(),
+        "resumed": False,
     }
+
+
+def start_or_resume(root_alpha_id: str) -> Dict[str, Any]:
+    """Resume the newest nonterminal run for this Root, otherwise create one.
+
+    This gives one user optimization task one persistent run across bootstrap
+    retries and controller restarts. Historical terminal runs are never reopened.
+    """
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    prefix = f"{_safe_component(root_alpha_id)}_"
+    candidates: list[tuple[str, Path, Dict[str, Any]]] = []
+    for path in LOGS_DIR.glob(f"{prefix}*.md"):
+        try:
+            state = StateStore(path, root_alpha_id).read()
+        except Exception:
+            continue
+        if str(state.get("root_alpha_id") or "") != str(root_alpha_id):
+            continue
+        run = state.get("run")
+        if not isinstance(run, dict):
+            continue
+        status = str(run.get("status") or "RUNNING").upper()
+        if status in RUN_TERMINAL_STATUSES:
+            continue
+        candidates.append((str(run.get("started_at") or ""), path, state))
+
+    if candidates:
+        _started_at, state_path, _snapshot = sorted(candidates, key=lambda item: item[0])[-1]
+        store = StateStore(state_path, root_alpha_id)
+        state = store.read()
+        run = state.get("run") or {}
+        run["status"] = "RUNNING"
+        run.pop("phase_detail", None)
+        state["run"] = run
+        state, _ = store._ensure_run_log(state)
+        store._write(state)
+        log_path = Path(str(run["log_path"])).expanduser().resolve()
+        return {
+            "ok": True,
+            "root_alpha_id": str(root_alpha_id),
+            "run_id": str(run["run_id"]),
+            "state_path": str(state_path.resolve()),
+            "log_path": str(log_path),
+            "log_exists": log_path.exists(),
+            "resumed": True,
+        }
+
+    return start_run(root_alpha_id)
 
 
 def _load_text_arg(path: str | None) -> str:
@@ -2949,6 +3073,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
 
     p = sub.add_parser("inspect-root"); p.add_argument("expression")
     p = sub.add_parser("start-run"); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("start-or-resume"); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("init"); p.add_argument("--baseline", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("append-log"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--section", required=True); p.add_argument("--text-file")
     p = sub.add_parser("update-dashboard"); p.add_argument("--dashboard", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
@@ -2978,6 +3103,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     try:
         if args.cmd == "inspect-root": out = inspect_root(args.expression)
         elif args.cmd == "start-run": out = start_run(args.root_alpha_id)
+        elif args.cmd == "start-or-resume": out = start_or_resume(args.root_alpha_id)
         elif args.cmd == "init": out = StateStore(args.state, args.root_alpha_id).initialize(_load_json_arg(args.baseline))
         elif args.cmd == "append-log": out = StateStore(args.state, args.root_alpha_id).append_log(args.section, _load_text_arg(args.text_file))
         elif args.cmd == "update-dashboard": out = StateStore(args.state, args.root_alpha_id).update_dashboard(_load_json_arg(args.dashboard))
