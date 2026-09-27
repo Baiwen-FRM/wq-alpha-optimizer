@@ -1500,6 +1500,15 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     }
 
 
+def preview_candidate_result(
+    contract: Dict[str, Any],
+    incumbent_result: Dict[str, Any],
+    candidate_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Pure mechanism preview used before deciding whether pending checks must wait."""
+    return _evaluate_contract(contract, incumbent_result, candidate_result)
+
+
 class StateStore:
     def __init__(self, path: Path | str, root_alpha_id: str):
         self.path = Path(path)
