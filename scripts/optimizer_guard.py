@@ -607,6 +607,36 @@ def _result_fact_fingerprint(evidence: Dict[str, Any]) -> str:
     ).hexdigest()
 
 
+
+def _register_evidence_on_state(state: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
+    """Register immutable evidence inside an already-loaded state snapshot."""
+    normalized = _validate_evidence_record(record)
+    normalized["content_fingerprint"] = _evidence_fingerprint(normalized)
+    eid = normalized["id"]
+    old = state.setdefault("evidence", {}).get(eid)
+    if old:
+        content_keys = ("kind", "subject", "source", "observed_at", "claim")
+        if _canonical_json({key: old.get(key) for key in content_keys}) == _canonical_json(
+            {key: normalized.get(key) for key in content_keys}
+        ):
+            return {
+                "ok": True,
+                "already_registered": True,
+                "id": eid,
+                "revision": int(state.get("evidence_revision", 0)),
+            }
+        return {"ok": False, "reason": "EVIDENCE_ID_ALREADY_USED"}
+
+    state["evidence_revision"] = int(state.get("evidence_revision", 0)) + 1
+    normalized["revision"] = state["evidence_revision"]
+    state["evidence"][eid] = normalized
+    return {
+        "ok": True,
+        "already_registered": False,
+        "id": eid,
+        "revision": state["evidence_revision"],
+    }
+
 def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     status = (state.get("run") or {}).get("status")
     if status in RUN_TERMINAL_STATUSES:
@@ -2070,27 +2100,17 @@ class StateStore:
         }
 
     def register_evidence(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            normalized = _validate_evidence_record(record)
-        except ValueError as exc:
-            return {"ok": False, "reason": "EVIDENCE_CONTRACT", "detail": str(exc)}
         state = self.read()
         terminal = _terminal_rejection(state)
         if terminal:
             return terminal
-        eid = normalized["id"]
-        normalized["content_fingerprint"] = _evidence_fingerprint(normalized)
-        old = state["evidence"].get(eid)
-        if old:
-            content_keys = ("kind", "subject", "source", "observed_at", "claim")
-            if _canonical_json({key: old.get(key) for key in content_keys}) == _canonical_json({key: normalized.get(key) for key in content_keys}):
-                return {"ok": True, "already_registered": True, "id": eid, "revision": state["evidence_revision"]}
-            return {"ok": False, "reason": "EVIDENCE_ID_ALREADY_USED"}
-        state["evidence_revision"] = int(state.get("evidence_revision", 0)) + 1
-        normalized["revision"] = state["evidence_revision"]
-        state["evidence"][eid] = normalized
-        self._write(state)
-        return {"ok": True, "already_registered": False, "id": eid, "revision": state["evidence_revision"]}
+        try:
+            result = _register_evidence_on_state(state, record)
+        except ValueError as exc:
+            return {"ok": False, "reason": "EVIDENCE_CONTRACT", "detail": str(exc)}
+        if result.get("ok") and not result.get("already_registered"):
+            self._write(state)
+        return result
 
     def set_plan(self, plan: Dict[str, Any], *, final_replan: bool = False) -> Dict[str, Any]:
         if not isinstance(plan, dict):
@@ -3110,11 +3130,48 @@ class StateStore:
             "checks": checks,
         }
         evaluation = _evaluate_contract(hyp["contract"], state["incumbent"].get("result_evidence", {}), result_snapshot)
+        result_evidence_id = f"E_CANDIDATE_RESULT_{fp}"
+        criterion_failed = [
+            str((item.get("criterion") or {}).get("name") or "")
+            for item in evaluation.get("criterion_results", [])
+            if not item.get("passed")
+        ]
+        protected_failed = [
+            str((item.get("policy") or {}).get("name") or "")
+            for item in evaluation.get("protected_results", [])
+            if not item.get("passed")
+        ]
+        evidence_record = {
+            "id": result_evidence_id,
+            "kind": "CANDIDATE_RESULT",
+            "subject": str((hyp.get("contract") or {}).get("mechanism") or hid),
+            "source": str(result_evidence["source"]),
+            "observed_at": str(result_evidence["observed_at"]),
+            "claim": (
+                f"Candidate {result_evidence['alpha_id']} for hypothesis {hid} evaluated "
+                f"{evaluation['status']}; failed_success={criterion_failed}; "
+                f"failed_protection={protected_failed}; "
+                f"new_blockers={evaluation.get('new_blockers', [])}; "
+                f"new_unresolved={evaluation.get('new_unresolved_checks', [])}."
+            ),
+        }
+        try:
+            evidence_registration = _register_evidence_on_state(state, evidence_record)
+        except ValueError as exc:
+            return {"ok": False, "reason": "CANDIDATE_RESULT_EVIDENCE_CONTRACT", "detail": str(exc)}
+        if not evidence_registration.get("ok"):
+            return evidence_registration
+
         hyp["status"] = evaluation["status"]
-        hyp["result"] = {"evidence": result_snapshot, "evaluation": evaluation}
+        hyp["result"] = {
+            "evidence": result_snapshot,
+            "evaluation": evaluation,
+            "evidence_ref": result_evidence_id,
+        }
         state["hypotheses"][hid] = hyp
         state["candidates"][fp]["result_evaluation"] = evaluation
         state["candidates"][fp]["result_alpha_id"] = str(result_evidence["alpha_id"])
+        state["candidates"][fp]["result_evidence_ref"] = result_evidence_id
         route_id = state["candidates"][fp].get("route_id") or hyp.get("route_id")
         plan = state.get("optimization_plan")
         if route_id and isinstance(plan, dict):
@@ -3124,7 +3181,13 @@ class StateStore:
                     state, str(route_id), plan.get("incumbent_alpha_id")
                 )
         self._write(state)
-        return {"ok": True, "hypothesis_id": hid, "status": evaluation["status"], "evaluation": evaluation}
+        return {
+            "ok": True,
+            "hypothesis_id": hid,
+            "status": evaluation["status"],
+            "evaluation": evaluation,
+            "evidence_ref": result_evidence_id,
+        }
 
     def promote(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         state = self.read()
