@@ -17,7 +17,7 @@ python3 scripts/bootstrap_run.py --alpha-id <ID>
 3. **Data Field / Dataset**：从 expression 解析实际使用 fields，并对这些 fields 做 exact detail lookup，记录 description/type/dataset/coverage/dateCoverage；
 4. **Visualization**：先检查现有 rich recordsets；若不足，创建一个 same-expression / same-settings、仅 `visualization=true` 的 diagnostic simulation。对 diagnostic Alpha 的 recordset listing 做有界稳定性确认，然后读取**平台当前列出的全部 available recordsets**。不要把“19”硬编码成协议；某次平台列出 19 个，就必须尝试读取这 19 个，未来列出 17/21 个也按实际列表全取。
 
-Bootstrap 固定完成单一 run Markdown 的 start-or-resume、上述四类事实取得、Guard baseline 初始化与 Dashboard 更新。四类事实必须完整取得并参与判断，但 raw intake、recordsets 与 baseline/dashboard 派生对象只在本次执行内使用；machine state 压缩嵌入同一 Markdown，不再生成 `.state/.data/assets` 等持久文件。Controller 不得把这些步骤拆开自由重排。
+Bootstrap 固定完成单一 run Markdown 的 start-or-resume、上述四类事实取得、Guard baseline 初始化与 Dashboard 更新。四类事实必须完整取得并参与判断，但 raw intake、recordsets 与 baseline/dashboard 派生对象只在本次执行内使用；machine state 压缩嵌入同一 Markdown。若 visualization 有可绘制数值序列，只额外生成一个同名 `*_dashboard.svg`，由 MD 引用；不生成 `.state/.data/assets`、raw snapshots 或每-chart 文件。Controller 不得把这些步骤拆开自由重排。
 
 若单个 recordset 在有界 retry 后仍不可读，保留其 listing 与 incomplete/unavailable 状态并继续使用其余事实；不要误判为“没有 visualization”。只有 WQ Lab capability/auth/BRAIN 整体不可继续时 bootstrap 才失败。
 
