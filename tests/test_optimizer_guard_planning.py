@@ -64,12 +64,26 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(result["ok"], result)
 
     def _post_activation_evidence(self, evidence_id, claim=None):
-        self._evidence(
-            evidence_id,
-            "ROUTE_DIAGNOSTIC",
-            "BRAIN:get_record_set_data",
-            claim or f"New post-activation diagnostic evidence {evidence_id} changes the active route question.",
+        state = self.store.read()
+        active = next(
+            route
+            for route in state["optimization_plan"]["routes"]
+            if route.get("status") == "ACTIVE"
         )
+        result = self.store.register_evidence(
+            {
+                "id": evidence_id,
+                "kind": "ROUTE_DIAGNOSTIC",
+                "subject": active["mechanism"],
+                "source": "BRAIN:get_record_set_data",
+                "observed_at": guard._now_iso(),
+                "claim": claim or (
+                    f"New mechanism-specific diagnostic evidence {evidence_id} "
+                    f"changes route {active['id']}."
+                ),
+            }
+        )
+        self.assertTrue(result["ok"], result)
         return evidence_id
 
     def _blocker_for_route(self, target, owner):
