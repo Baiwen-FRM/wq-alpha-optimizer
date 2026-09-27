@@ -119,6 +119,32 @@ class CoreGuardTests(TestCase):
                 ]
             }
             plan["routes"][0]["assessment_refs"] = [assessment_id]
+        else:
+            entry = guard._catalog_entry_for_enhancement(target, owner)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = "A1"
+            plan["synthesis"] = {
+                "blockers": [],
+                "enhancements": [
+                    {
+                        "target": target,
+                        "owner": owner,
+                        "observation_refs": [evidence],
+                        "mechanisms": [
+                            {
+                                "id": assessment_id,
+                                "mechanism": mechanism,
+                                "method_family": method_family,
+                                "status": "PLAUSIBLE_PROBE",
+                                "evidence_refs": [evidence],
+                                "reasoning": "Current evidence justifies one blocker-free enhancement probe.",
+                                "next_question": "Does this mechanism improve the target without protected-metric damage?",
+                            }
+                        ],
+                    }
+                ],
+            }
+            plan["routes"][0]["assessment_refs"] = [assessment_id]
         return store.set_plan(plan)
 
     def _no_action_plan(self, store=None, *, evidence_id="E_NO_ACTION"):
@@ -720,6 +746,34 @@ class CoreGuardTests(TestCase):
         )
         self.assertEqual(result["status"], "INCONCLUSIVE", result)
         self.assertIn("NEW_PROJECT_WARNING", result["evaluation"]["new_unresolved_checks"])
+
+
+    def test_submission_ready_cannot_mask_no_promotion_optimizer_outcome(self):
+        store = guard.StateStore(Path(self.tempdir.name) / "ready-no-promotion.json", "READY")
+        self._initialize(
+            store,
+            checks=[{"name": "LOW_SHARPE", "status": "PASS", "value": 2.2, "limit": 1.58}],
+        )
+        state = store.read()
+        state["optimization_plan"] = {
+            "revision": 2,
+            "based_on_evidence_revision": 0,
+            "final_replan_used": True,
+            "status": "EXHAUSTED",
+            "routes": [],
+            "incumbent_alpha_id": "READY",
+            "synthesis": {"blockers": [], "enhancements": []},
+        }
+        store._write(state)
+        result = store.finish_run(
+            "SUBMISSION_READY",
+            "The Root is submission-ready but optimization found no better Incumbent.",
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["reason"],
+            "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
+        )
 
 
     def test_normal_completion_requires_initialized_state_but_forced_stop_does_not(self):
