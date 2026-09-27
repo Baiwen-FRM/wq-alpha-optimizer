@@ -2145,8 +2145,18 @@ class StateStore:
                         "route_id": raw_route.get("id"),
                     }
 
+        current_blockers = _current_blockers(state)
+        required_enhancements = (
+            _enhancement_objectives_for_incumbent_cycle(state)
+            if final_replan and not current_blockers
+            else []
+        )
         synthesis = None
-        if state.get("planning_contract") == "v2" and _current_blockers(state):
+        synthesis_required = (
+            state.get("planning_contract") == "v2"
+            and (bool(current_blockers) or bool(raw_routes) or bool(required_enhancements))
+        )
+        if synthesis_required:
             try:
                 synthesis = _normalize_synthesis(plan.get("synthesis"), state, based_on_evidence_revision)
             except ValueError as exc:
@@ -2157,7 +2167,10 @@ class StateStore:
                     return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_MISMATCH", "detail": detail}
                 return {"ok": False, "reason": "SYNTHESIS_CONTRACT", "detail": detail}
             if not raw_routes:
-                synthesis_rejection = _empty_plan_synthesis_rejection(synthesis)
+                synthesis_rejection = _empty_plan_synthesis_rejection(
+                    synthesis,
+                    required_enhancements=required_enhancements,
+                )
                 if synthesis_rejection:
                     return synthesis_rejection
 
@@ -2186,6 +2199,7 @@ class StateStore:
             for ref in [*route["evidence_refs"], *observation_refs]:
                 if int(state["evidence"][ref].get("revision", 0)) > based_on_evidence_revision:
                     return {"ok": False, "reason": "PLAN_EVIDENCE_REVISION_MISMATCH", "route_id": route["id"], "evidence_ref": ref}
+            route["objective_type"] = "DEFECT" if current_blockers else "ENHANCEMENT"
             routes.append(route)
 
         if synthesis is not None and routes:
@@ -2216,6 +2230,7 @@ class StateStore:
                         str(assessment.get("target")) != str(route.get("target"))
                         or str(assessment.get("owner")) != str(route.get("owner"))
                         or str(assessment.get("mechanism")) != str(route.get("mechanism"))
+                        or str(assessment.get("objective_type")) != str(route.get("objective_type"))
                     ):
                         return {
                             "ok": False,
@@ -2232,53 +2247,56 @@ class StateStore:
                         }
                     matched.append(ref)
                 route["assessment_refs"] = sorted(dict.fromkeys(matched))
-                primary_blockers = sorted(
-                    {
-                        str(assessment_map[ref].get("blocker"))
-                        for ref in matched
-                        if assessment_map.get(ref)
+                if route.get("objective_type") == "DEFECT":
+                    primary_blockers = sorted(
+                        {
+                            str(assessment_map[ref].get("blocker"))
+                            for ref in matched
+                            if assessment_map.get(ref) and assessment_map[ref].get("blocker")
+                        }
+                    )
+                    explains = route.get("explains_blockers") or primary_blockers
+                    synthesis_blockers = {
+                        str(item.get("name")): item
+                        for item in synthesis.get("blockers", [])
+                        if isinstance(item, dict) and item.get("name")
                     }
-                )
-                explains = route.get("explains_blockers") or primary_blockers
-                synthesis_blockers = {
-                    str(item.get("name")): item
-                    for item in synthesis.get("blockers", [])
-                    if isinstance(item, dict) and item.get("name")
-                }
-                unknown_explained = sorted(set(explains) - set(synthesis_blockers))
-                if unknown_explained:
-                    return {
-                        "ok": False,
-                        "reason": "ROUTE_EXPLAINS_UNKNOWN_BLOCKER",
-                        "route_id": route.get("id"),
-                        "blockers": unknown_explained,
-                    }
-                if not set(primary_blockers).issubset(set(explains)):
-                    return {
-                        "ok": False,
-                        "reason": "ROUTE_DROPS_PRIMARY_BLOCKER",
-                        "route_id": route.get("id"),
-                        "required": primary_blockers,
-                    }
-                for blocker_name in explains:
-                    row = synthesis_blockers[blocker_name]
-                    if blocker_name in primary_blockers:
-                        continue
-                    compatible = [
-                        assessment
-                        for assessment in row.get("mechanisms", [])
-                        if assessment.get("mechanism") == route.get("mechanism")
-                        and assessment.get("status") in SYNTHESIS_ACTIONABLE | {"NEEDS_DIAGNOSTIC"}
-                    ]
-                    if not compatible:
+                    unknown_explained = sorted(set(explains) - set(synthesis_blockers))
+                    if unknown_explained:
                         return {
                             "ok": False,
-                            "reason": "ROUTE_CROSS_BLOCKER_MECHANISM_UNSUPPORTED",
+                            "reason": "ROUTE_EXPLAINS_UNKNOWN_BLOCKER",
                             "route_id": route.get("id"),
-                            "blocker": blocker_name,
-                            "mechanism": route.get("mechanism"),
+                            "blockers": unknown_explained,
                         }
-                route["explains_blockers"] = sorted(dict.fromkeys(explains))
+                    if not set(primary_blockers).issubset(set(explains)):
+                        return {
+                            "ok": False,
+                            "reason": "ROUTE_DROPS_PRIMARY_BLOCKER",
+                            "route_id": route.get("id"),
+                            "required": primary_blockers,
+                        }
+                    for blocker_name in explains:
+                        row = synthesis_blockers[blocker_name]
+                        if blocker_name in primary_blockers:
+                            continue
+                        compatible = [
+                            assessment
+                            for assessment in row.get("mechanisms", [])
+                            if assessment.get("mechanism") == route.get("mechanism")
+                            and assessment.get("status") in SYNTHESIS_ACTIONABLE | {"NEEDS_DIAGNOSTIC"}
+                        ]
+                        if not compatible:
+                            return {
+                                "ok": False,
+                                "reason": "ROUTE_CROSS_BLOCKER_MECHANISM_UNSUPPORTED",
+                                "route_id": route.get("id"),
+                                "blocker": blocker_name,
+                                "mechanism": route.get("mechanism"),
+                            }
+                    route["explains_blockers"] = sorted(dict.fromkeys(explains))
+                else:
+                    route.pop("explains_blockers", None)
 
         active = [route for route in routes if route["status"] == "ACTIVE"]
         if len(active) > 1:
