@@ -141,7 +141,7 @@ Assessment status 只允许：
 
 每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 snapshot 自相矛盾。若新 plan 要重开同一 Incumbent cycle 内相同 `target/owner/mechanism`，仍必须提供 `reopen_reason` 和 exhaustion 之后 fingerprint 实质新颖的 `new_observation_refs`。Promotion 后的新 Incumbent 不继承前任 route exhaustion。
 
-Promotion 或 material current-result refresh 会使旧 plan `STALE`。新 Incumbent 重置 `final_replan_used=false`；同一 Incumbent refresh 不重置已消耗的 final re-plan。当前 routes 全部 terminal 后只能执行一次 `final-replan`。若同一 Incumbent 在 final re-plan 之后因 fresh Result/check refresh 再次进入 `STALE`，re-profile 可以继续，但 **empty `routes=[]` 仍继承本 cycle 已进入 enhancement objectives 的完整 no-action gate**；不能因为这次调用不是 `final_replan=True` 就绕过剩余 method families。
+Promotion 或 material current-result refresh 会使旧 plan `STALE`。新 Incumbent 重置 final-replan history；同一 Incumbent 保留 `final_replan_evidence_revision`。当前 routes 全部 terminal 后必须 final-replan；同一 Incumbent 若没有晚于该 revision 的 routing-material evidence，则重复 final-replan 返回 `FINAL_REPLAN_REQUIRES_NEW_EVIDENCE`。新的 `CANDIDATE_RESULT / DIAGNOSTIC / ROUTE_DIAGNOSTIC / DIAGNOSTIC_EXCLUSION / FIELD_SCOPE` 可以使旧 final re-plan 失效并允许再次 re-plan；transport failure、历史摘要等非 routing evidence 不算。若同一 Incumbent 因 fresh Result/check refresh 再次进入 `STALE`，re-profile 可以继续，但 **empty `routes=[]` 仍继承本 cycle 已进入 enhancement objectives 的完整 no-action gate**。正常 exhaustion terminal 还要求最后一次 final-replan 已覆盖最后一条 material routing evidence。
 
 ### Route closure evidence gate
 
