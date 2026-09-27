@@ -526,7 +526,7 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(self.store.register_evidence({"id": "E_NEXT", "kind": "DIAGNOSTIC", "subject": "TAIL", "source": "BRAIN:get_record_set_data", "observed_at": "2026-09-21T00:02:00Z", "claim": "The real run later recorded a distinct tail observation."})["ok"])
         self.assertTrue(self.store.set_plan(self._plan(("R1", "LOW_SUB_UNIVERSE_SHARPE", "optimization/subuniverse.md", "breadth_robustness", ["E_ROOT"], "The blocker supports a breadth route."), ("R2", "SHARPE", "optimization/sharpe.md", "tail_robustness", ["E_NEXT"], "The later observation supports a separate tail route.")))["ok"])
         self._open_focus(route_id="R1", target="LOW_SUB_UNIVERSE_SHARPE", owner="optimization/subuniverse.md", evidence="E_ROOT", blocker="LOW_SUB_UNIVERSE_SHARPE")
-        self.assertTrue(self.store.register_evidence({"id": "E_CLOSE_REAL", "kind": "DIAGNOSTIC", "subject": "ROUTE_DIAGNOSTIC", "source": "BRAIN:get_record_set_data", "observed_at": "2026-09-21T00:03:00Z", "claim": "A new post-activation diagnostic invalidates the first breadth question."})["ok"])
+        self.assertTrue(self.store.register_evidence({"id": "E_CLOSE_REAL", "kind": "ROUTE_DIAGNOSTIC", "subject": "breadth_robustness", "source": "BRAIN:get_record_set_data", "observed_at": "2026-09-21T00:03:00Z", "claim": "A new post-activation diagnostic invalidates the first breadth question."})["ok"])
         result = self.store.exhaust_focus("The first focus is exhausted; the next route remains justified.", "E_CLOSE_REAL")
         self.assertEqual(result["next_route"]["id"], "R2")
         self.assertNotEqual(self.store.read().get("run", {}).get("status"), "COMPLETED_WITH_EXHAUSTION")
