@@ -312,7 +312,8 @@ class CoreGuardTests(TestCase):
         self.assertEqual(refreshed["plan_status"], "STALE")
         self.assertTrue(refreshed["readiness"]["ready"])
         finished = self.store.finish_run("SUBMISSION_READY", "Fresh current checks are ready.")
-        self.assertTrue(finished["ok"], finished)
+        self.assertFalse(finished["ok"], finished)
+        self.assertEqual(finished["reason"], "PLAN_STALE_REPLAN_REQUIRED")
 
     def test_refresh_rejects_wrong_alpha_and_stale_timestamp(self):
         wrong = self.store.refresh_incumbent_result(
