@@ -141,7 +141,7 @@ Assessment status 只允许：
 
 每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 snapshot 自相矛盾。若新 plan 要重开同一 Incumbent cycle 内相同 `target/owner/mechanism`，仍必须提供 `reopen_reason` 和 exhaustion 之后 fingerprint 实质新颖的 `new_observation_refs`。Promotion 后的新 Incumbent 不继承前任 route exhaustion。
 
-Promotion 或 material current-result refresh 会使旧 plan `STALE`。新 Incumbent 重置 `final_replan_used=false`；同一 Incumbent refresh 不重置已消耗的 final re-plan。当前 routes 全部 terminal 后只能执行一次 `final-replan`，而 final empty plan 仍必须重新通过上述 synthesis/no-action gate。
+Promotion 或 material current-result refresh 会使旧 plan `STALE`。新 Incumbent 重置 `final_replan_used=false`；同一 Incumbent refresh 不重置已消耗的 final re-plan。当前 routes 全部 terminal 后只能执行一次 `final-replan`。若同一 Incumbent 在 final re-plan 之后因 fresh Result/check refresh 再次进入 `STALE`，re-profile 可以继续，但 **empty `routes=[]` 仍继承本 cycle 已进入 enhancement objectives 的完整 no-action gate**；不能因为这次调用不是 `final_replan=True` 就绕过剩余 method families。
 
 ### Route closure evidence gate
 
@@ -306,4 +306,4 @@ Guard 必须验证：
 
 只有当 hypothesis 本身有充分理由预测“这一步就应跨过当前 check threshold”时，才把 `check required_status=PASS` 作为 success criterion。若机制预测的是 check 数值的方向性改善而不是一步过线，使用 `check_value`，例如从 `LOW_SUB_UNIVERSE_SHARPE.value=0.88` 提升到 `0.90` 可以满足预声明的 `min_change=0.01`，即使该 check 仍为 FAIL。不要把所有 repair hypothesis 都写成“一步过线”，也不要把 check.value 塞进普通 metrics。
 
-`REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。Guard 会把 conclusive candidate evaluation 自动登记为 `CANDIDATE_RESULT` evidence，subject 绑定该 mechanism，供后续 synthesis 使用；它**不自动证明 sibling mechanisms/method families 已耗尽**。Controller 只有在当前 route mechanism 的剩余可证伪问题确实不存在时才能 `exhaust-focus`，而 final empty plan 仍必须逐 family 通过 no-action gate。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。
+`REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。Guard 会把 conclusive candidate evaluation 自动登记为 `CANDIDATE_RESULT` evidence，subject 绑定该 mechanism，供后续 synthesis 使用；它**不自动证明 sibling mechanisms/method families 已耗尽**。每个 conclusive Result 后 controller 必须重建 mechanism-synthesis scaffold，并联合读取当前 Incumbent cycle 的 `candidate_history`（before/after metrics、metric deltas、protection failures、new blockers、route/method-family history）后再生成下一条 discriminator。Controller 只有在当前 route mechanism 的剩余可证伪问题确实不存在时才能 `exhaust-focus`，而任何同-Incumbent empty plan 仍必须逐 family 通过 no-action gate。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。
