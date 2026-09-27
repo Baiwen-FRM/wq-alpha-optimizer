@@ -113,6 +113,59 @@ class BootstrapRunTests(TestCase):
         self.assertIn("Status: `READY`", text)
         self.assertLess(text.index("## Alpha Snapshot / Dashboard"), text.index("## Audit Trail"))
 
+    def test_bootstrap_renders_one_real_svg_dashboard_without_asset_sprawl(self):
+        intake = self._intake()
+        intake["dashboard"]["visualization"]["charts"] = [
+            {
+                "id": "pnl",
+                "title": "PnL",
+                "type": "line",
+                "labels": [f"2026-01-{day:02d}" for day in range(1, 41)],
+                "series": [
+                    {
+                        "name": "PnL",
+                        "values": [float(day * day) for day in range(1, 41)],
+                    }
+                ],
+            },
+            {
+                "id": "sharpe-by-cap",
+                "title": "Sharpe by capitalization",
+                "type": "bar",
+                "labels": ["0-20", "20-40", "40-60", "60-80", "80-100"],
+                "series": [
+                    {
+                        "name": "Sharpe",
+                        "values": [1.43, 0.40, 0.90, 1.33, 1.65],
+                    }
+                ],
+            },
+        ]
+
+        with patch.object(bootstrap.provider, "_load_wq_lib", return_value=object()), patch.object(
+            bootstrap.provider, "intake_snapshot", return_value=intake
+        ):
+            result = bootstrap.bootstrap_run("ROOT", discovery_attempts=1, discovery_sleep_seconds=0)
+
+        self.assertTrue(result["ok"], result)
+        log_path = Path(result["log_path"])
+        svg_path = log_path.with_name(f"{log_path.stem}_dashboard.svg")
+        self.assertTrue(svg_path.exists(), svg_path)
+        self.assertFalse((self.logs / "assets").exists())
+
+        markdown = log_path.read_text(encoding="utf-8")
+        self.assertIn(f"]({svg_path.name})", markdown)
+        self.assertNotRegex(markdown, r"[▁▂▃▄▅▆▇█]")
+
+        svg = svg_path.read_text(encoding="utf-8")
+        self.assertIn("<svg", svg)
+        self.assertIn("<polyline", svg)
+        self.assertIn("Sharpe by capitalization", svg)
+        self.assertIn('opacity="0.88"', svg)
+
+        persistent_files = sorted(path.name for path in self.logs.iterdir() if path.is_file())
+        self.assertEqual(persistent_files, [log_path.name, svg_path.name])
+
     def test_provider_preflight_failure_does_not_create_run(self):
         with patch.object(
             bootstrap.provider, "_load_wq_lib", side_effect=RuntimeError("missing primitives")
