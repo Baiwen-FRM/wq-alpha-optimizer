@@ -401,16 +401,28 @@ class PlanningGuardTests(TestCase):
         self.assertTrue(finished["ok"], finished)
         self.assertIn("Status: `COMPLETED_WITH_EXHAUSTION`", Path(finished["run"]["log_path"]).read_text())
 
-    def test_final_replan_can_be_used_only_once(self):
+    def test_final_replan_repeats_only_after_new_evidence(self):
         self.store.set_plan(
             self._plan(("R1", "SHARPE", "optimization/sharpe.md", "signal_quality", ["E1"], "Signal evidence supports the route."))
         )
         self._open_focus()
         close_ref = self._post_activation_evidence("E_CLOSE_ONCE")
         self.store.exhaust_focus("R1 exhausted.", close_ref)
-        self.assertTrue(self.store.set_plan(self._no_action_plan("E_NO_ACTION_ONCE"), final_replan=True)["ok"])
-        result = self.store.set_plan({"routes": []}, final_replan=True)
-        self.assertEqual(result["reason"], "FINAL_REPLAN_ALREADY_USED")
+        first = self.store.set_plan(self._no_action_plan("E_NO_ACTION_ONCE"), final_replan=True)
+        self.assertTrue(first["ok"], first)
+
+        repeated = self.store.set_plan({"routes": []}, final_replan=True)
+        self.assertEqual(repeated["reason"], "FINAL_REPLAN_REQUIRES_NEW_EVIDENCE")
+
+        second = self.store.set_plan(
+            self._no_action_plan("E_NO_ACTION_AFTER_NEW_EVIDENCE"),
+            final_replan=True,
+        )
+        self.assertTrue(second["ok"], second)
+        self.assertGreater(
+            second["plan"]["final_replan_evidence_revision"],
+            first["plan"]["final_replan_evidence_revision"],
+        )
 
     def test_promotion_marks_plan_stale(self):
         self.store.set_plan(
