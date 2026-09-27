@@ -3301,6 +3301,21 @@ class StateStore:
                 readiness = _submission_readiness(state)
                 if not readiness.get("ready"):
                     return {"ok": False, "reason": readiness.get("reason"), "readiness": readiness}
+                if plan:
+                    if plan.get("status") == "ACTIVE" or any(
+                        route.get("status") == "ACTIVE" for route in plan.get("routes", [])
+                    ):
+                        return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
+                    if not plan.get("final_replan_used"):
+                        return {"ok": False, "reason": "FINAL_REPLAN_REQUIRED"}
+                    root_alpha_id = str((state.get("root_baseline") or {}).get("alpha_id") or "")
+                    incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
+                    if root_alpha_id and incumbent_alpha_id == root_alpha_id:
+                        return {
+                            "ok": False,
+                            "reason": "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
+                            "incumbent_alpha_id": incumbent_alpha_id,
+                        }
             elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
                 return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
