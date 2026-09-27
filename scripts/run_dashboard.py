@@ -417,9 +417,15 @@ def _render_visualization(context: Dict[str, Any]) -> str:
     elif summary:
         out += f"- {_cell(summary)}\n"
 
+    chart_rows = [row for row in (vis.get("charts") or []) if isinstance(row, dict)]
+    if chart_rows:
+        out += "- Charts: " + _cell(
+            "; ".join(str(row.get("title") or row.get("id") or "Visualization") for row in chart_rows)
+        ) + "\n"
+
     asset = vis.get("asset")
     if asset:
-        chart_count = len([row for row in (vis.get("charts") or []) if isinstance(row, dict)])
+        chart_count = len(chart_rows)
         out += (
             f"\n**Visualization Dashboard ({chart_count} chart"
             f"{'s' if chart_count != 1 else ''})**\n\n"
