@@ -2,6 +2,7 @@ import sys
 import tempfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -14,9 +15,18 @@ import optimizer_guard as guard  # noqa: E402
 class EvidenceMethodSynthesisAdversarialTests(TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
-        self.state_path = Path(self.tempdir.name) / "state.json"
+        root = Path(self.tempdir.name)
+        self.state_path = root / "state.json"
+        self.logs = root / "logs"
+        self.patches = patch.multiple(
+            guard,
+            LOGS_DIR=self.logs,
+            STATE_DIR=self.logs,
+        )
+        self.patches.start()
 
     def tearDown(self):
+        self.patches.stop()
         self.tempdir.cleanup()
 
     def _store(self, checks):
@@ -124,6 +134,12 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
             "observation_refs": list(observations),
             "mechanisms": mechanisms,
         }
+
+    def test_runtime_logs_are_isolated_to_test_tempdir(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
+        log_path = Path(store.read()["run"]["log_path"])
+        self.assertTrue(log_path.is_relative_to(self.logs), log_path)
+        self.assertTrue(log_path.exists())
 
     def test_scaffold_combines_current_blocker_with_method_catalog(self):
         store = self._store([{"name": "LOW_SHARPE", "status": "FAIL"}])
