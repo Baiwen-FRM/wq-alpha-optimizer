@@ -863,6 +863,20 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         )
         self.assertEqual(evaluated["status"], "REFUTED", evaluated)
         candidate_evidence_ref = evaluated["evidence_ref"]
+
+        scaffold = mechanism_synthesis.build_synthesis_scaffold(store.read())
+        self.assertEqual(scaffold["enhancements"][0]["target"], "TURNOVER")
+        self.assertEqual(len(scaffold["candidate_history"]), 1)
+        learned = scaffold["candidate_history"][0]
+        self.assertEqual(learned["hypothesis_id"], "H_TURN")
+        self.assertEqual(learned["status"], "REFUTED")
+        self.assertEqual(learned["method_families"], ["stable_vs_noisy_component"])
+        self.assertAlmostEqual(learned["metric_deltas"]["SHARPE"], -1.86)
+        self.assertAlmostEqual(learned["metric_deltas"]["TURNOVER"], -0.0554)
+        progress = scaffold["enhancement_progress"][0]
+        self.assertIn("stable_vs_noisy_component", progress["routed_method_families"])
+        self.assertIn("hysteresis_or_change_control", progress["unrouted_method_families"])
+
         exhausted = store.exhaust_focus(
             "The noisy-innovation mechanism was refuted by its candidate Result."
         )
@@ -894,6 +908,139 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         missing_families = set(final["enhancements"][0]["missing_method_families"])
         self.assertIn("hysteresis_or_change_control", missing_families)
         self.assertIn("verified_target_tvr_control", missing_families)
+
+
+    def test_stale_empty_reprofile_cannot_bypass_entered_enhancement_method_space(self):
+        store = self._store([{"name": "LOW_SHARPE", "status": "PASS"}])
+        root_ref = self._evidence(
+            store,
+            "E_TURNOVER_CYCLE",
+            "DIAGNOSTIC",
+            "TURNOVER",
+            "Current turnover structure justifies one bounded enhancement question.",
+        )
+        first_row = self._enhancement_row(
+            "TURNOVER",
+            "optimization/turnover.md",
+            [
+                self._assessment(
+                    "A_FIRST",
+                    "noisy_innovation",
+                    "stable_vs_noisy_component",
+                    "PLAUSIBLE_PROBE",
+                    [root_ref],
+                )
+            ],
+            [root_ref],
+        )
+        first_route = {
+            "id": "R_FIRST",
+            "target": "TURNOVER",
+            "owner": "optimization/turnover.md",
+            "mechanism": "noisy_innovation",
+            "evidence_refs": [root_ref],
+            "assessment_refs": ["A_FIRST"],
+            "rationale": "Test the first enhancement mechanism.",
+        }
+        self.assertTrue(
+            store.set_plan(self._enhancement_plan(store, [first_row], [first_route]))["ok"]
+        )
+        self.assertTrue(
+            store.set_focus(
+                "ENHANCEMENT",
+                "optimization/turnover.md",
+                "TURNOVER",
+                [root_ref],
+                route_id="R_FIRST",
+            )["ok"]
+        )
+        close_first = self._evidence(
+            store,
+            "E_CLOSE_FIRST",
+            "ROUTE_DIAGNOSTIC",
+            "noisy_innovation",
+            "A new mechanism-specific diagnostic closes the first enhancement route.",
+        )
+        first_done = store.exhaust_focus("First enhancement mechanism is exhausted.", close_first)
+        self.assertTrue(first_done["ok"], first_done)
+        self.assertTrue(first_done["final_replan_required"])
+
+        second_row = self._enhancement_row(
+            "TURNOVER",
+            "optimization/turnover.md",
+            [
+                self._assessment(
+                    "A_SECOND",
+                    "settings_driven_turnover",
+                    "single_decay_setting",
+                    "PLAUSIBLE_PROBE",
+                    [root_ref, close_first],
+                )
+            ],
+            [root_ref, close_first],
+        )
+        second_route = {
+            "id": "R_SECOND",
+            "target": "TURNOVER",
+            "owner": "optimization/turnover.md",
+            "mechanism": "settings_driven_turnover",
+            "evidence_refs": [root_ref, close_first],
+            "assessment_refs": ["A_SECOND"],
+            "rationale": "Use the one allowed final re-plan for a distinct mechanism.",
+        }
+        final_plan = store.set_plan(
+            self._enhancement_plan(store, [second_row], [second_route]),
+            final_replan=True,
+        )
+        self.assertTrue(final_plan["ok"], final_plan)
+        self.assertTrue(final_plan["plan"]["final_replan_used"])
+
+        self.assertTrue(
+            store.set_focus(
+                "ENHANCEMENT",
+                "optimization/turnover.md",
+                "TURNOVER",
+                [root_ref, close_first],
+                route_id="R_SECOND",
+            )["ok"]
+        )
+        close_second = self._evidence(
+            store,
+            "E_CLOSE_SECOND",
+            "ROUTE_DIAGNOSTIC",
+            "settings_driven_turnover",
+            "A new mechanism-specific diagnostic closes the final-replan route.",
+        )
+        second_done = store.exhaust_focus("Second enhancement mechanism is exhausted.", close_second)
+        self.assertTrue(second_done["ok"], second_done)
+
+        refreshed = store.refresh_incumbent_result(
+            {
+                "alpha_id": "ROOT",
+                "metrics": {"SHARPE": 2.07, "FITNESS": 1.57, "TURNOVER": 0.1054},
+                "checks": [{"name": "LOW_SHARPE", "status": "PASS"}],
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:get_submission_check",
+                "response_complete": True,
+                "authenticated": True,
+            }
+        )
+        self.assertTrue(refreshed["ok"], refreshed)
+        self.assertEqual(refreshed["plan_status"], "STALE")
+
+        rejected = store.set_plan(
+            {
+                "based_on_evidence_revision": store.read()["evidence_revision"],
+                "synthesis": {"blockers": [], "enhancements": []},
+                "routes": [],
+            }
+        )
+        self.assertFalse(rejected["ok"], rejected)
+        self.assertEqual(rejected["reason"], "EMPTY_PLAN_METHOD_SPACE_UNASSESSED")
+        self.assertEqual(rejected["enhancements"][0]["target"], "TURNOVER")
+        missing = set(rejected["enhancements"][0]["missing_method_families"])
+        self.assertIn("hysteresis_or_change_control", missing)
+        self.assertIn("verified_target_tvr_control", missing)
 
 
     def test_final_replan_empty_plan_still_requires_full_no_action_proof(self):
