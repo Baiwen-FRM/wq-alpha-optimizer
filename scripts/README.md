@@ -38,7 +38,7 @@ After mandatory intake evidence is registered, use:
 python3 scripts/mechanism_synthesis.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The script only creates a deterministic blocker/method-family/evidence scaffold. It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required only when claiming an empty plan/exhaustion.
+The script creates a deterministic blocker/enhancement-method-family/evidence scaffold. For blocker-free work, pass `--enhancement <TARGET> <OWNER>` (repeatable). It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required when claiming an empty plan/exhaustion, including enhancement targets already entered in the current Incumbent cycle.
 
 ## Reserved candidate executor
 
@@ -48,7 +48,7 @@ After `optimizer_guard.py reserve` returns `allowed=true`, run:
 python3 scripts/execute_reserved_candidate.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check snapshot → evaluate → promote-if-SUPPORTED`. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. The command itself performs bounded safe continuation for 429, poll/result reads and temporarily incomplete snapshots; a normal controller invokes it once per reserved candidate. Re-running a POSTED candidate still resumes by Location and never sends a second POST. `SUBMITTING/AMBIGUOUS_POST` and exhausted bounded continuation return an explicit reconciliation boundary rather than blind retry.
+It owns the mechanical path `RESERVED → SUBMITTING → POSTED → current Result/check snapshot → evaluate → promote-if-SUPPORTED`. Before waiting on unrelated pending checks, it previews the frozen mechanism contract: a decisive criterion/protection failure is recorded immediately as `REFUTED`; only a still-supportable candidate waits for unresolved safety/check observations. The POST intent is persisted before WQ Lab submission, and a confirmed Location is persisted before polling. Re-running a POSTED candidate resumes by Location and never sends a second POST.
 
 The executor also closes a legacy already-POSTED hypothesis as `INCONCLUSIVE` when its frozen observation type cannot exist in the Incumbent snapshot schema; it preserves the real Result evidence and never rewrites the frozen contract after seeing outcome data.
 
