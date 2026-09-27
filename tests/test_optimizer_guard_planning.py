@@ -414,6 +414,21 @@ class PlanningGuardTests(TestCase):
         repeated = self.store.set_plan({"routes": []}, final_replan=True)
         self.assertEqual(repeated["reason"], "FINAL_REPLAN_REQUIRES_NEW_EVIDENCE")
 
+        transport_only = self.store.register_evidence(
+            {
+                "id": "E_TRANSPORT_ONLY",
+                "kind": "TRANSPORT_FAILURE",
+                "subject": "HISTORICAL_RETRY",
+                "source": "BRAIN:transport",
+                "observed_at": guard._now_iso(),
+                "claim": "A transport-only failure is audit evidence but does not change the mechanism routing question.",
+            }
+        )
+        self.assertTrue(transport_only["ok"], transport_only)
+        still_blocked = self.store.set_plan({"routes": []}, final_replan=True)
+        self.assertEqual(still_blocked["reason"], "FINAL_REPLAN_REQUIRES_NEW_EVIDENCE")
+        self.assertEqual(still_blocked["new_material_evidence_refs"], [])
+
         second = self.store.set_plan(
             self._no_action_plan("E_NO_ACTION_AFTER_NEW_EVIDENCE"),
             final_replan=True,
