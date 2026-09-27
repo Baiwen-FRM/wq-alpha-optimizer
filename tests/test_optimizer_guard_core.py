@@ -491,7 +491,7 @@ class CoreGuardTests(TestCase):
         self.assertEqual(result["status"], "INCONCLUSIVE")
         self.assertIn("protected_metric:FITNESS", result["evaluation"]["missing"])
 
-    def test_same_incumbent_stale_empty_reprofile_preserves_final_replan_usage(self):
+    def test_same_incumbent_stale_empty_reprofile_preserves_but_must_refresh_final_replan(self):
         empty = self.store.set_plan(self._no_action_plan())
         self.assertTrue(empty["ok"], empty)
         final = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_FINAL"), final_replan=True)
@@ -513,7 +513,23 @@ class CoreGuardTests(TestCase):
         replacement = self.store.set_plan(self._no_action_plan(evidence_id="E_NO_ACTION_REFRESH"))
         self.assertTrue(replacement["ok"], replacement)
         self.assertTrue(replacement["plan"]["final_replan_used"])
-        finished = self.store.finish_run("COMPLETED_WITH_EXHAUSTION", "Fresh re-profile still found no justified route.")
+
+        stale_finish = self.store.finish_run(
+            "COMPLETED_WITH_EXHAUSTION",
+            "Fresh evidence exists after the previous final re-plan.",
+        )
+        self.assertFalse(stale_finish["ok"], stale_finish)
+        self.assertEqual(stale_finish["reason"], "FINAL_REPLAN_REQUIRED")
+
+        refreshed_final = self.store.set_plan(
+            self._no_action_plan(evidence_id="E_NO_ACTION_REFRESH_FINAL"),
+            final_replan=True,
+        )
+        self.assertTrue(refreshed_final["ok"], refreshed_final)
+        finished = self.store.finish_run(
+            "COMPLETED_WITH_EXHAUSTION",
+            "Final re-plan now includes the latest evidence revision.",
+        )
         self.assertTrue(finished["ok"], finished)
 
 

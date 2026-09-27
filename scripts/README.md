@@ -15,7 +15,7 @@ python3 scripts/optimizer_guard.py --help
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
 `set-plan --final-replan` is accepted only after all routes in the current plan
-are terminal and can be used once per Incumbent cycle. Root or a legitimate STALE re-profile may install an empty EXHAUSTED plan only after the v2 synthesis contract provides a complete auditable no-action proof; a missing or merely historical method review cannot create an empty plan. `refresh-incumbent` updates the current authenticated Result/check snapshot and stales an existing plan when facts change.
+are terminal. A repeated final re-plan for the same Incumbent is allowed only when routing-material evidence has appeared since the previous final re-plan (for example a current candidate Result or mechanism diagnostic); transport-only/history evidence does not reopen the gate. Root or a legitimate STALE re-profile may install an empty EXHAUSTED plan only after the v2 synthesis contract provides a complete auditable no-action proof. `refresh-incumbent` updates the current authenticated Result/check snapshot and stales an existing plan when facts change.
 
 `withdraw-hypothesis` is the narrow pre-reservation correction path: it only works while an OPEN hypothesis has no candidate fingerprint and no candidate/simulation record. Use it when deterministic preflight finds a contract omission before reserve/POST. It records the old hypothesis as WITHDRAWN and requires a new hypothesis ID. It is deliberately blocked after reserve, including after RELEASED.
 
@@ -38,7 +38,7 @@ After mandatory intake evidence is registered, use:
 python3 scripts/mechanism_synthesis.py --state <STATE_PATH> --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The script creates a deterministic blocker/enhancement-method-family/evidence scaffold. For blocker-free work, pass `--enhancement <TARGET> <OWNER>` (repeatable). It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; full catalog coverage is required when claiming an empty plan/exhaustion, including enhancement targets already entered in the current Incumbent cycle.
+The script creates a deterministic blocker/enhancement-method-family/evidence scaffold. For blocker-free work, pass `--enhancement <TARGET> <OWNER>` (repeatable); enhancement objectives already entered in the current Incumbent cycle are also recovered automatically. The scaffold includes structured `candidate_history` and `enhancement_progress`, so the next planning pass can reason jointly over all conclusive Results and see which catalog method families have never been routed. It does not choose economic causes or operators. The controller fills mechanism assessments, and `optimizer_guard.py set-plan` enforces the v2 synthesis contract. Normal routes need only the assessments that justify those routes; any same-Incumbent empty plan requires full catalog coverage for entered enhancement objectives, including STALE re-profiles after fresh Result/check refresh.
 
 ## Reserved candidate executor
 

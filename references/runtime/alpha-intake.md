@@ -84,9 +84,9 @@ python3 scripts/mechanism_synthesis.py \
 - Plan 必须携带当前 `synthesis`。每条 route 必须有 target、Primary owner、mechanism、evidence refs、`assessment_refs` 和 rationale；operator 存在性不是 route evidence。route 只能引用 `ACTIONABLE / PLAUSIBLE_PROBE` assessment，并保留该 assessment 实际使用的 evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“需要某个 discriminator”，先完成 `NEEDS_DIAGNOSTIC`，不要先建 route 再立刻 evidence-exhaust；
 - 一个上游 mechanism 可以解释多个 blocker，但只有 synthesis 对每个被声明的 blocker 都有 compatible assessment 时，route 才能写 `explains_blockers`；不能因为两个 blocker 同时存在就自行宣称共因；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；
-- 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。**空 plan 不是普通 shortcut。** 如果当前仍有 FAIL blocker，想写 `routes=[]`，synthesis 必须覆盖该 blocker catalog 中全部当前 method families，并且不能剩下 `ACTIONABLE / PLAUSIBLE_PROBE / NEEDS_DIAGNOSTIC`；否则 guard 分别返回 `EMPTY_PLAN_HAS_TESTABLE_MECHANISM / EMPTY_PLAN_DIAGNOSTIC_REQUIRED / EMPTY_PLAN_METHOD_SPACE_UNASSESSED`。历史“以前试过很多方法”不能替代这个 no-action proof；
+- 通过 `set-plan` 写入 guard 后，只有 active route 才能进入 FOCUS。**空 plan 不是普通 shortcut。** 如果当前仍有 FAIL blocker，想写 `routes=[]`，synthesis 必须覆盖该 blocker catalog 中全部当前 method families；如果当前是 blocker-free enhancement，则同一 Incumbent cycle 只要已经进入过某个 enhancement target/owner，之后任何 empty plan（包括 final re-plan 后 fresh Result/check refresh 造成的 STALE re-profile）都必须覆盖该 objective 的全部 catalog method families，并且不能剩下 `ACTIONABLE / PLAUSIBLE_PROBE / NEEDS_DIAGNOSTIC`。否则 guard 分别返回 `EMPTY_PLAN_HAS_TESTABLE_MECHANISM / EMPTY_PLAN_DIAGNOSTIC_REQUIRED / EMPTY_PLAN_METHOD_SPACE_UNASSESSED`。历史“以前试过很多方法”或“现在暂时想不到 payload”都不能替代这个 no-action proof；
 - Incumbent promotion 会使旧 plan `STALE`；`refresh-incumbent` 只有在 normalized metrics/check facts 发生实质变化时才使旧 plan `STALE`，纯 timestamp/source refresh 不重新打开 planning；route exhaustion/reopen 只在同一 Incumbent cycle 内继承；
-- 当前 plan 的 route 全部 terminal 后，必须执行该 Incumbent cycle 唯一的一次 `final-replan`。final re-plan 如果想为空，仍必须重新通过同一个 evidence+method no-action gate；不能用第一次 profile 的旧“空 plan”结论直接继承。通过后才可进入 `COMPLETED_WITH_EXHAUSTION`，不得无限重规划。
+- 当前 plan 的 route 全部 terminal 后，必须执行 `final-replan`。同一 Incumbent **没有新的 routing-material evidence 时不能重复 final-replan**；但新的 conclusive candidate Result、current diagnostic / route diagnostic / diagnostic exclusion 或 field-scope evidence 会使旧 final re-plan 失效，并允许再次 re-plan。这样新实验可以产生下一代 hypothesis，而 transport failure、历史摘要或单纯重复读取不能制造新的搜索额度。final re-plan 如果想为空，仍必须重新通过同一个 evidence+method no-action gate；终止时最后一次 final re-plan 必须已经覆盖最后一条 material evidence。
 - **Plan 写入后立即执行。** `set-plan` 若返回 `must_continue=true` / `next_required_action=SET_FOCUS`，controller 必须立即进入 Stage D；正常 optimize 请求不得在这里结束或向用户报告“下一步再继续”。
 
 ## Stage D — FOCUS
@@ -106,7 +106,7 @@ python3 scripts/mechanism_synthesis.py \
 1. 不得人为制造 blocker，也不得简单挑“最差的一个数字”开始调参；
 2. 只有存在当前 evidence 支持的、same-thesis、可证伪 improvement opportunity 时才设置 `FOCUS=ENHANCEMENT`；
 3. 仍然只能选一个 target / mechanism，并使用同一 hypothesis/candidate/promotion 纪律；
-4. 如果没有这样的 opportunity，把 Profile 写成空 plan，再执行一次 final re-plan；仍为空则以 `COMPLETED_WITH_EXHAUSTION` 结束，并在报告中写 `No justified enhancement hypothesis`。
+4. 如果当前没有显然的 opportunity，先生成 evidence+method scaffold 并检查已进入 enhancement objective 的 `candidate_history`、`enhancement_progress` 和未 routed method families；有 in-scope discriminator 就继续为 `PLAUSIBLE_PROBE` 或 `NEEDS_DIAGNOSTIC`，**不要询问用户替 controller 选择正常 route**。只有完整 no-action proof 通过后，空 plan 才能进入 exhaustion。
 
 ENHANCEMENT 不是无限优化许可，也不能用来绕过已有 FAIL blocker。
 
@@ -124,10 +124,11 @@ Simulation/Result transport 由 `execute_reserved_candidate.py` 一次调用有�
 
 - `SUPPORTED`：尝试 promotion。这里的 supported 是**mechanism-level research progress**，不要求最终 blocker 已 PASS；promotion 后把 candidate 作为新的 Incumbent，旧 plan STALE，回到 fresh diagnosis/routing。若 blocker 仍存在，只能基于新 Incumbent 的新事实提出下一步，不得机械扫描相邻参数。
 - `REFUTED`：淘汰当前 frozen hypothesis/payload；不要自动把整个 mechanism family 标为 exhausted。只有该 mechanism 下已没有不同、未解决且 evidence-supported 的 falsifiable question 时才关闭 route。
+- 任一 conclusive `SUPPORTED/REFUTED` 后，在选择下一 route/hypothesis 前都必须重新生成 `mechanism_synthesis` scaffold；联合读取当前 Incumbent cycle 的 `candidate_history`、metric deltas、failed protection/success、new blockers 与 `enhancement_progress`。多个 candidate 形成的新联合约束必须成为下一 hypothesis 的依据；禁止把它们当成互不相关的单次试验，也禁止在正常 locked scope 内用 AskUserQuestion 让用户决定“下一步跑哪条”。
 - `INCONCLUSIVE`：当前 frozen hypothesis 已结束，不原地改合同或重复 POST。若原因是旧合同/schema 与真实平台 observation 不匹配，保留已取得的真实 Result/check 作为 post-activation diagnostic evidence，并用它关闭/重规划当前问题；后续实验必须以新的 hypothesis ID 正确冻结 observation type。其它 inconclusive 只有在新增信息能明确改变可判定性时才开新 hypothesis，否则关闭该问题。Executor 内部尚可等待的 transient poll/check 状态不属于这里的 final `INCONCLUSIVE`。
 - 当前 focus 已没有新的合理 question：`exhaust-focus`。如果该 route 已有 evaluated candidate Result，可以直接关闭；如果该 route 从激活后还没有 candidate Result，则必须先注册一个**激活之后新出现且 fingerprint 实质新的 diagnostic evidence**，并用 `exhaust-focus --evidence-ref <ID>` 显式引用。planning 时已经存在的 blocker、历史 negative evidence、重复读取或 timestamp-only evidence 不能作为零-candidate 关闭依据。guard 成功关闭后自动激活下一个 pending route（如有）。
 - `close-route` 同样受上述 gate 约束；ACTIVE route 不能通过 direct close 绕过 Focus/Hypothesis/Candidate。Pending route 若要在未激活前被 dismiss，也必须引用 plan 之后的新 evidence，而不能仅凭 plan 当时已经知道的事实。
-- 没有 pending route 时，controller 先执行一次 final re-plan；只有 final re-plan 仍为空且没有 OPEN hypothesis/focus/ACTIVE route，且所有会 materially change routing 的可取得 in-scope diagnostics 已完成或明确 unavailable，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。终态前 guard 还会审计本 Incumbent cycle 的 terminal routes：凡没有 candidate Result、也没有 auditable post-activation closure evidence 的 route，拒绝 exhaustion terminal。
+- 没有 pending route 时，controller 先执行一次 final re-plan；若随后同一 Incumbent 的 fresh Result/check refresh 使 plan 变 STALE，必要 re-profile 仍必须继承本 cycle 已进入 enhancement objectives 的 no-action gate。只有当前 empty plan 对所有 required method families 都给出有效 exclusion/no-action proof、没有 OPEN hypothesis/focus/ACTIVE route，且所有会 materially change routing 的可取得 in-scope diagnostics 已完成或明确 unavailable，才能 `finish-run --status COMPLETED_WITH_EXHAUSTION`。终态前 guard 还会审计本 Incumbent cycle 的 terminal routes：凡没有 candidate Result、也没有 auditable post-activation closure evidence 的 route，拒绝 exhaustion terminal。
 - 若 submission check 的 `PENDING/UNKNOWN` 与专用 endpoint 的 `passes_check/value/limit` 冲突，做一次有界 fresh reconciliation；仍冲突则保留 unresolved/unknown，不据此 promotion、也不为通过 check 制造 candidate。
 - `SUBMISSION_READY` 只能在当前 Incumbent 的 fresh、完整、authenticated、auditable checks 没有 blocking/unresolved 项时由 guard 接受；普通 `SUCCESS` 不等价于 submission-ready。
 - 用户明确停止、下一步必须跨 locked scope、或认证平台在恢复纪律后仍不可继续时，分别使用 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE`。这些 terminal 会冻结当时 machine state，不要求为了“收尾好看”伪造关闭动作。
