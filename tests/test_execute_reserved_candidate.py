@@ -491,7 +491,10 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["stage"], "RESULT_EVALUATED")
         self.assertEqual(result["evaluation"]["status"], "REFUTED")
-        self.assertIn("SELF_CORRELATION", result["evaluation"]["new_unresolved_checks"])
+        self.assertIn(
+            "SELF_CORRELATION",
+            result["evaluation"]["evaluation"]["new_unresolved_checks"],
+        )
         state = self.store.read()
         self.assertEqual(state["hypotheses"]["H1"]["status"], "REFUTED")
         evidence_ref = state["candidates"][self.fingerprint]["result_evidence_ref"]
