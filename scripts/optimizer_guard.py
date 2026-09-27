@@ -1273,8 +1273,9 @@ def _route_closure_rejection(
         "activated_at_evidence_revision": activated_revision,
         "current_evidence_revision": int(state.get("evidence_revision", 0)),
         "required": (
-            "At least one evaluated candidate Result bound to this route, or an explicit "
-            "evidence_ref for genuinely new post-activation diagnostic evidence."
+            "At least one conclusive SUPPORTED/REFUTED candidate Result bound to this route, "
+            "or genuinely new post-activation BRAIN ROUTE_DIAGNOSTIC/DIAGNOSTIC_EXCLUSION "
+            "evidence whose subject explicitly names this route mechanism."
         ),
     }
 
