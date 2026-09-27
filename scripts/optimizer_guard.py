@@ -1055,11 +1055,35 @@ def _last_final_replan_evidence_revision(plan: Dict[str, Any] | None) -> int | N
         return None
 
 
+REPLAN_MATERIAL_EVIDENCE_KINDS = {
+    "CANDIDATE_RESULT",
+    "DIAGNOSTIC",
+    "ROUTE_DIAGNOSTIC",
+    "DIAGNOSTIC_EXCLUSION",
+    "FIELD_SCOPE",
+}
+
+
+def _material_replan_evidence_refs_since(
+    state: Dict[str, Any],
+    revision: int | None,
+) -> list[str]:
+    if revision is None:
+        return []
+    return sorted(
+        str(evidence_id)
+        for evidence_id, row in (state.get("evidence") or {}).items()
+        if isinstance(row, dict)
+        and int(row.get("revision", 0)) > revision
+        and str(row.get("kind") or "").upper() in REPLAN_MATERIAL_EVIDENCE_KINDS
+    )
+
+
 def _final_replan_required(state: Dict[str, Any], plan: Dict[str, Any] | None) -> bool:
     last_revision = _last_final_replan_evidence_revision(plan)
     if last_revision is None:
         return True
-    return int(state.get("evidence_revision", 0)) > last_revision
+    return bool(_material_replan_evidence_refs_since(state, last_revision))
 
 
 def _empty_plan_synthesis_rejection(
@@ -2151,11 +2175,15 @@ class StateStore:
             if any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in current.get("routes", [])):
                 return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
             if current.get("final_replan_used") and not _final_replan_required(state, current):
+                last_final_revision = _last_final_replan_evidence_revision(current)
                 return {
                     "ok": False,
                     "reason": "FINAL_REPLAN_REQUIRES_NEW_EVIDENCE",
-                    "last_final_replan_evidence_revision": _last_final_replan_evidence_revision(current),
+                    "last_final_replan_evidence_revision": last_final_revision,
                     "current_evidence_revision": int(state.get("evidence_revision", 0)),
+                    "new_material_evidence_refs": _material_replan_evidence_refs_since(
+                        state, last_final_revision
+                    ),
                 }
         elif current:
             if current.get("status") == "STALE":
@@ -3335,11 +3363,15 @@ class StateStore:
 
             if status == "COMPLETED_WITH_EXHAUSTION":
                 if not plan or _final_replan_required(state, plan):
+                    last_final_revision = _last_final_replan_evidence_revision(plan)
                     return {
                         "ok": False,
                         "reason": "FINAL_REPLAN_REQUIRED",
-                        "last_final_replan_evidence_revision": _last_final_replan_evidence_revision(plan),
+                        "last_final_replan_evidence_revision": last_final_revision,
                         "current_evidence_revision": int(state.get("evidence_revision", 0)),
+                        "new_material_evidence_refs": _material_replan_evidence_refs_since(
+                            state, last_final_revision
+                        ),
                     }
                 if plan.get("status") != "EXHAUSTED" or any(route.get("status") not in TERMINAL_ROUTE_STATUSES for route in plan.get("routes", [])):
                     return {"ok": False, "reason": "PLAN_NOT_EXHAUSTED"}
