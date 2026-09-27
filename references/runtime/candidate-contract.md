@@ -60,7 +60,7 @@ Guard 会按 `kind / subject / source / claim` 保存一个 informational conten
 
 ## 3. Evidence synthesis + optimization plan
 
-Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。Guard 不判断经济 thesis 的真伪，但会验证：当前 blocker 是否经过合法 method-family synthesis、route 是否来自一个可测试 assessment、空 plan 是否真的完成了 no-action proof。经济判断仍由 controller + Primary reference 负责。
+Profile/Plan 位于 DIAGNOSE 与 FOCUS 之间。Guard 不判断经济 thesis 的真伪，但会验证：当前 blocker 或 blocker-free enhancement objective 是否经过合法 method-family synthesis、route 是否来自一个可测试 assessment、空 plan 是否真的完成 no-action proof。经济判断仍由 controller + Primary reference 负责。
 
 新 run 的 planning contract 是 v2。Plan 先包含 `synthesis`，再包含执行 routes。最小示意：
 
@@ -137,7 +137,7 @@ Assessment status 只允许：
 - `EMPTY_PLAN_METHOD_SPACE_UNASSESSED`
 - 或 `SYNTHESIS_CONTRACT`
 
-因此 Root first profile、STALE re-profile、promotion 后 new Incumbent、以及 `final-replan` 都不能再仅凭“历史上试过很多方法”安装空 plan。空 plan 只有通过同一 no-action gate 才能成为 `EXHAUSTED`。
+因此 Root first profile、STALE re-profile、promotion 后 new Incumbent、以及 `final-replan` 都不能再仅凭“历史上试过很多方法”安装空 plan。对 blocker-free enhancement，route 使用 `synthesis.enhancements[]` 绑定 target/owner + assessments；一旦该 Incumbent cycle 进入过某 enhancement target，final empty re-plan 必须覆盖该 target/owner 的全部 catalog method families。一个 mechanism 的 REFUTED candidate 不能替代其它 families 的评估。空 plan 只有通过同一 no-action gate 才能成为 `EXHAUSTED`。
 
 每条 `route.evidence_refs` 与 `route.new_observation_refs` 都必须在 `based_on_evidence_revision` 当时已经存在；否则 snapshot 自相矛盾。若新 plan 要重开同一 Incumbent cycle 内相同 `target/owner/mechanism`，仍必须提供 `reopen_reason` 和 exhaustion 之后 fingerprint 实质新颖的 `new_observation_refs`。Promotion 后的新 Incumbent 不继承前任 route exhaustion。
 
@@ -149,16 +149,16 @@ Route 被计划成 `ACTIVE` 就意味着 controller 当时判断它是 actionabl
 
 ACTIVE route 的正常 terminal transition 需要满足至少一个条件：
 
-- 该 route 已产生至少一个 **evaluated candidate Result**；或
-- 没有 candidate Result，但 controller 提供一个显式 `evidence_ref`，该 evidence 的 revision 必须晚于 route activation，而且 informational fingerprint 在 activation 之前不存在。
+- 该 route 已产生至少一个绑定的 **conclusive `SUPPORTED/REFUTED` candidate Result**；或
+- 没有 conclusive candidate Result，但 controller 提供一个显式 `evidence_ref`：其 revision 晚于 route activation、informational fingerprint 在 activation 前不存在、`source` 来自 `BRAIN:`、`kind` 为 `ROUTE_DIAGNOSTIC/DIAGNOSTIC_EXCLUSION`，且 `subject` 明确等于当前 mechanism（或 `MECHANISM:<mechanism>`）。
 
-第二种是 diagnostic invalidation 例外，不是“跳过 candidate”的常规捷径。它用于 route 激活后出现的新 cap/sector/industry/coverage/schema/平台事实真正让原问题失去 actionability。planning 时已经存在的 blocker、历史实验摘要、旧 recordset、重复 ID、只换 timestamp 的 evidence 都不满足。
+第二种是 mechanism-specific diagnostic invalidation 例外，不是“跳过 candidate”的常规捷径。`INCONCLUSIVE` candidate、simulation/transport failure、`RESULT_CONTRACT_FAILURE` 等 plumbing evidence 只能记录“这次无法评价”，不能证明 route mechanism exhausted。planning 时已经存在的 blocker、历史实验摘要、旧 recordset、重复 ID、只换 timestamp 的 evidence 也不满足。
 
 `close-route` 与 `exhaust-focus` 都执行这个 gate；`COMPLETED_WITH_EXHAUSTION` 还会重新审计当前 Incumbent cycle 的 terminal route history，防止旧状态或绕路留下零-work route 后直接 final-replan 结束。
 
 `run.status` 进入 `SUCCESS`、`SUBMISSION_READY`、`COMPLETED_WITH_EXHAUSTION`、`USER_STOP`、`SCOPE_BOUNDARY` 或 `PLATFORM_UNRECOVERABLE` 后是 terminal boundary；所有 research-state mutation 都拒绝并返回 `RUN_ALREADY_TERMINAL`。`append_log` 只追加最终人工说明，不改变研究状态，因此仍可使用。
 
-其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求当前 Incumbent snapshot 的 authenticated/complete/auditable checks 无 blocking 或 unresolved 项。
+其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求当前 Incumbent snapshot 的 authenticated/complete/auditable checks 无 blocking/unresolved 项，并且不能存在 ACTIVE/STALE research plan；若完成 final re-plan 后 Incumbent 仍是 Root，Guard 要求使用 `COMPLETED_WITH_EXHAUSTION` 表达“未找到更优 Incumbent”.
 
 ## 4. Focus
 
@@ -294,7 +294,7 @@ Guard 必须验证：
 - frozen success/protection contract 所需 typed observations 已存在；
 - 为了比较 new blocker/unresolved，当前 snapshot 不得无故丢失 Incumbent 已存在的 check 名称；
 - success criteria 与 protected metrics 是否成立；
-- candidate 是否引入**新的** blocking check 或 unresolved check。`FAIL` 永远 blocking；若当前项目/平台把某个 WARNING 视为 blocking，可在 raw check row 中显式 `policy_blocking:true`。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved，不应阻止 mechanism-level evaluation。正常 executor 对“相对 Incumbent 新出现的 PENDING/UNKNOWN/RUNNING/PROCESSING”先做有界等待，不把瞬时平台状态立刻冻结成 `INCONCLUSIVE`；若仍无法稳定则进入 reconciliation boundary。稳定后仍存在的新 unresolved（例如未分类 WARNING）才由 Guard 记为 `INCONCLUSIVE`。
+- candidate 是否引入**新的** blocking check 或 unresolved check。`FAIL` 永远 blocking。WARNING policy 在 Incumbent 上只决定一次；candidate/refresh 对同名 WARNING 由 Guard 自动继承该 `policy_classified/policy_blocking`，真正新出现的 WARNING 仍 unresolved。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved。正常 executor 对“相对 Incumbent 新出现的 PENDING/UNKNOWN/RUNNING/PROCESSING”做有界等待，但在等待前先做纯机制 preview：只要任何已观察 success criterion / protected metric 明确失败，或出现新 blocker，conjunctive hypothesis 已经足以 `REFUTED`，无关的 correlation PENDING/缺行不能把这个负结论覆盖成 `INCONCLUSIVE`。只有 candidate 仍可能 `SUPPORTED` 时，未解决 safety/check observations 才必须继续等待/进入 reconciliation boundary。
 
 `SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
 
@@ -306,4 +306,4 @@ Guard 必须验证：
 
 只有当 hypothesis 本身有充分理由预测“这一步就应跨过当前 check threshold”时，才把 `check required_status=PASS` 作为 success criterion。若机制预测的是 check 数值的方向性改善而不是一步过线，使用 `check_value`，例如从 `LOW_SUB_UNIVERSE_SHARPE.value=0.88` 提升到 `0.90` 可以满足预声明的 `min_change=0.01`，即使该 check 仍为 FAIL。不要把所有 repair hypothesis 都写成“一步过线”，也不要把 check.value 塞进普通 metrics。
 
-`REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。它**不自动证明整个 route mechanism 已耗尽**。Controller 只有在剩余 same-mechanism questions 已有负证据、重复、或没有新的可证伪信息时才能 `exhaust-focus`。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。
+`REFUTED` 只否定当前 frozen hypothesis/payload 所声称的问题。Guard 会把 conclusive candidate evaluation 自动登记为 `CANDIDATE_RESULT` evidence，subject 绑定该 mechanism，供后续 synthesis 使用；它**不自动证明 sibling mechanisms/method families 已耗尽**。Controller 只有在当前 route mechanism 的剩余可证伪问题确实不存在时才能 `exhaust-focus`，而 final empty plan 仍必须逐 family 通过 no-action gate。反过来，`SUPPORTED` 后 promotion 会产生新的 Incumbent cycle；旧 plan 变 STALE，必须 fresh diagnosis/re-plan，而不是沿参数邻域连续扫点。

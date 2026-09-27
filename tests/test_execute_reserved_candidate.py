@@ -457,6 +457,51 @@ class ReservedCandidateExecutorTests(TestCase):
         self.assertEqual(wq.start_calls, 1)
         self.assertEqual(wq.poll_calls, 2)
 
+    def test_decisive_refutation_does_not_wait_for_unrelated_pending_checks(self):
+        class RefutedWithPendingChecksWQ(SequenceWQ):
+            def get_result(self, session, alpha_id):
+                result = super().get_result(session, alpha_id)
+                result["is"]["sharpe"] = 0.2
+                result["is"]["fitness"] = 0.1
+                return result
+
+            def get_submission_check(self, session, alpha_id):
+                return {
+                    "is": {
+                        "checks": [
+                            {"name": "LOW_SHARPE", "result": "FAIL", "value": 0.2, "limit": 2.69},
+                            {"name": "SELF_CORRELATION", "result": "PENDING"},
+                            {"name": "PROD_CORRELATION", "result": "PENDING"},
+                            {"name": "UNITS", "result": "WARNING"},
+                        ]
+                    }
+                }
+
+        wq = RefutedWithPendingChecksWQ(
+            [FakeResponse(201, location="/simulations/S-refuted")],
+            [{"status": "done", "alpha_id": "CHILD-REFUTED"}],
+        )
+        result = executor.execute_reserved_candidate(
+            self.store,
+            wq,
+            object(),
+            max_continuations=1,
+            sleep_seconds=0,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["stage"], "RESULT_EVALUATED")
+        self.assertEqual(result["evaluation"]["status"], "REFUTED")
+        self.assertIn(
+            "SELF_CORRELATION",
+            result["evaluation"]["evaluation"]["new_unresolved_checks"],
+        )
+        state = self.store.read()
+        self.assertEqual(state["hypotheses"]["H1"]["status"], "REFUTED")
+        evidence_ref = state["candidates"][self.fingerprint]["result_evidence_ref"]
+        self.assertEqual(state["evidence"][evidence_ref]["kind"], "CANDIDATE_RESULT")
+        self.assertEqual(state["evidence"][evidence_ref]["subject"], "signal_quality")
+
+
     def test_executor_owns_http_429_retry_budget(self):
         wq = SequenceWQ(
             [
@@ -514,11 +559,14 @@ class ReservedCandidateExecutorTests(TestCase):
             "The posted legacy hypothesis cannot be evaluated under its frozen observation schema.",
             evidence_ref,
         )
-        self.assertTrue(exhausted["ok"], exhausted)
-        self.assertTrue(exhausted["final_replan_required"], exhausted)
+        self.assertFalse(exhausted["ok"], exhausted)
+        self.assertEqual(
+            exhausted["reason"],
+            "ROUTE_CLOSURE_EVIDENCE_NOT_MECHANISM_SPECIFIC",
+        )
         self.assertEqual(
             self.store.read()["optimization_plan"]["routes"][0]["status"],
-            "EXHAUSTED",
+            "ACTIVE",
         )
 
     def test_new_transient_check_is_waited_out_before_evaluation(self):

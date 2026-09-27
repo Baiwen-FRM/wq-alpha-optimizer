@@ -241,12 +241,20 @@ def _evaluate_done_alpha(
             "closure": closed,
         }
 
+    incumbent_result = (state.get("incumbent") or {}).get("result_evidence", {})
     missing_contract_observations = guard.candidate_result_pending_observations(
         contract,
-        (state.get("incumbent") or {}).get("result_evidence", {}),
+        incumbent_result,
         evidence,
     )
-    if not evidence.get("response_complete") or missing_contract_observations:
+    preview = guard.preview_candidate_result(contract, incumbent_result, evidence)
+    # Pending safety/check observations matter only while the hypothesis could
+    # still be supported. A decisive metric/protection failure is already valid
+    # negative mechanism evidence and must be recorded as REFUTED now.
+    if (
+        not evidence.get("response_complete")
+        or (missing_contract_observations and preview.get("status") != "REFUTED")
+    ):
         return {
             "ok": False,
             "stage": "RESULT_EVIDENCE_PENDING",
@@ -255,6 +263,7 @@ def _evaluate_done_alpha(
             "simulation_id": simulation_id,
             "missing_contract_observations": missing_contract_observations,
             "result_evidence": evidence,
+            "preview": preview,
             "resumable": True,
         }
 

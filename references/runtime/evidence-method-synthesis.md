@@ -4,13 +4,13 @@ This layer bridges mandatory Alpha intake and optimization planning.
 
 It does **not** claim that the current evidence reveals the true cause. Its job is to combine:
 
-- current blockers;
+- current blockers, or an explicitly selected blocker-free enhancement objective;
 - Expression + Settings;
 - current Result + checks;
 - exact used-field / dataset metadata;
 - Visualization / recordsets;
 - auditable historical evidence when identity-compatible;
-- the blocker owner's allowed method families.
+- the blocker/enhancement owner's allowed method families.
 
 The output is a small set of falsifiable mechanism assessments that can drive diagnostics or experiments.
 
@@ -28,7 +28,7 @@ python3 scripts/mechanism_synthesis.py \
   --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The scaffold puts the current intake context and method space in one object: current Incumbent expression/settings/result evidence, fixed Dashboard field/visualization context, the raw intake path when present, current blockers, canonical owners/method families from `mechanism-catalog.json`, and the evidence registry. The controller fills the assessments; the script does not guess economics.
+The scaffold puts the current intake context and method space in one object: current Incumbent expression/settings/result evidence, fixed Dashboard field/visualization context, current blockers, any explicitly requested blocker-free enhancement objectives, canonical owners/method families from `mechanism-catalog.json`, and the evidence registry. Raw intake/recordsets are runtime inputs and are not represented as persistent artifact paths. The controller fills the assessments; the script does not guess economics.
 
 ## Assessment states
 
@@ -61,19 +61,20 @@ A route must reference one or more `assessment_refs` whose status is `ACTIONABLE
 
 One upstream mechanism may explain multiple blockers only when the synthesis contains a compatible assessment for each claimed blocker. This supports causal compression without allowing a route to claim unrelated failures.
 
-The synthesis chooses a **method family / mechanism question**, not an operator. Exact expression/settings mutations are selected later by the active Primary reference and frozen hypothesis contract.
+The synthesis chooses a **method family / mechanism question**, not an operator. For blocker-free enhancement, call the scaffold with `--enhancement <TARGET> <OWNER>` (for example `--enhancement TURNOVER optimization/turnover.md`) so the same catalog-bound assessment contract applies. Exact expression/settings mutations are selected later by the active Primary reference and frozen hypothesis contract.
 
 ## Empty plan / exhaustion
 
 Normal plans are intentionally lightweight: if a justified route exists, the controller does **not** need to enumerate every method family before testing it.
 
-An empty plan is different. To claim “no justified route” for a blocker, the synthesis must cover the entire current method-family catalog for that blocker. Every family must be assessed and there may be no `ACTIONABLE`, `PLAUSIBLE_PROBE`, or `NEEDS_DIAGNOSTIC` assessment.
+An empty plan is different. To claim “no justified route” for a blocker, the synthesis must cover the entire current method-family catalog for that blocker. For a blocker-free enhancement cycle, final empty re-plan must likewise cover the entire catalog method space of every enhancement target/owner entered during the current Incumbent cycle. Every required family must be assessed and there may be no `ACTIONABLE`, `PLAUSIBLE_PROBE`, or `NEEDS_DIAGNOSTIC` assessment.
 
 Therefore:
 
 - testable mechanism remains → `EMPTY_PLAN_HAS_TESTABLE_MECHANISM`;
 - unresolved diagnostic remains → `EMPTY_PLAN_DIAGNOSTIC_REQUIRED`;
 - method families were never assessed → `EMPTY_PLAN_METHOD_SPACE_UNASSESSED`;
-- only a complete, auditable no-action proof can install an empty exhausted plan.
+- only a complete, auditable no-action proof can install an empty exhausted plan;
+- one REFUTED payload excludes only its bound mechanism/method-family claim; it cannot be generalized to sibling method families without their own current evidence.
 
 This is the machine gate that prevents “we tried many things historically” from silently becoming evidence that the present Alpha has no experiment left.

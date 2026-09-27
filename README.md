@@ -34,7 +34,7 @@ Run start → Root snapshot → Diagnose/Profile → Ordered Plan
    / USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE
 ```
 
-An empty Profile/Plan is valid only after the evidence+method synthesis gate proves that every current blocker method family is either auditably excluded or has no unresolved discriminator; the controller must not invent a route merely to keep searching, but it also cannot use history summaries to skip unassessed method space. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
+An empty Profile/Plan is valid only after the evidence+method synthesis gate proves that every required method family is auditably excluded or has no unresolved discriminator. This includes current blocker families and, on final re-plan, blocker-free enhancement targets already entered in the current Incumbent cycle. The controller must not invent a route merely to keep searching, but one failed payload cannot be generalized into exhaustion of sibling method families. GitHub CI runs the stdlib test suite and compile checks for every push/PR.
 
 
 ## v3.3.1 real-run hardening
@@ -96,7 +96,7 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 
 - fixes the remaining loophole where a controller could create an actionable ACTIVE route, close it without any Focus/Hypothesis/Candidate Result, run an empty final re-plan, and still reach `COMPLETED_WITH_EXHAUSTION`;
 - every route now records its activation evidence revision and candidate Results are bound back to `route_id`;
-- ACTIVE route closure requires either at least one evaluated candidate Result, or an explicit genuinely-new post-activation diagnostic `evidence_ref`;
+- ACTIVE route closure requires either at least one conclusive `SUPPORTED/REFUTED` candidate Result, or a genuinely-new post-activation BRAIN diagnostic/exclusion evidence explicitly bound to that route mechanism; `INCONCLUSIVE`/plumbing failures do not count;
 - duplicate/timestamp-only/pre-plan evidence cannot satisfy the zero-candidate closure exception;
 - automatic activation of the next pending route stamps a new activation revision, so each route has its own attempt boundary;
 - exhaustion terminal performs a second route-history audit and rejects unaudited zero-candidate closures.
@@ -110,7 +110,10 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - routes must cite synthesis assessments and carry the evidence that made the mechanism testable; one upstream mechanism may explain multiple blockers only when each blocker has a compatible assessment;
 - historical “tried before” summaries cannot certify mechanism exhaustion or `EXCLUDED`;
 - normal non-empty plans remain lightweight and do not enumerate every method family;
-- an empty plan/final re-plan is deliberately strict: every current blocker method family must be assessed, with no remaining testable or diagnostic question;
+- an empty plan/final re-plan is deliberately strict: every current blocker method family, plus every enhancement target entered in the current Incumbent cycle, must be assessed with no remaining testable or diagnostic question;
+- candidate evaluation is asymmetric by design: decisive negative mechanism evidence can produce `REFUTED` before unrelated safety checks finish, while `SUPPORTED`/promotion still requires the complete safe snapshot;
+- same-name WARNING policy is inherited from the current Incumbent; new WARNING names remain unresolved;
+- if optimization finishes without promotion, the run reports `COMPLETED_WITH_EXHAUSTION` rather than using Root submission readiness as a proxy for optimization success;
 - the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
 
 

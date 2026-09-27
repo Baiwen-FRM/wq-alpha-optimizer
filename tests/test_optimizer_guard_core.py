@@ -119,6 +119,32 @@ class CoreGuardTests(TestCase):
                 ]
             }
             plan["routes"][0]["assessment_refs"] = [assessment_id]
+        else:
+            entry = guard._catalog_entry_for_enhancement(target, owner)
+            method_family = entry["mechanisms"][0]["method_family"]
+            assessment_id = "A1"
+            plan["synthesis"] = {
+                "blockers": [],
+                "enhancements": [
+                    {
+                        "target": target,
+                        "owner": owner,
+                        "observation_refs": [evidence],
+                        "mechanisms": [
+                            {
+                                "id": assessment_id,
+                                "mechanism": mechanism,
+                                "method_family": method_family,
+                                "status": "PLAUSIBLE_PROBE",
+                                "evidence_refs": [evidence],
+                                "reasoning": "Current evidence justifies one blocker-free enhancement probe.",
+                                "next_question": "Does this mechanism improve the target without protected-metric damage?",
+                            }
+                        ],
+                    }
+                ],
+            }
+            plan["routes"][0]["assessment_refs"] = [assessment_id]
         return store.set_plan(plan)
 
     def _no_action_plan(self, store=None, *, evidence_id="E_NO_ACTION"):
@@ -286,7 +312,8 @@ class CoreGuardTests(TestCase):
         self.assertEqual(refreshed["plan_status"], "STALE")
         self.assertTrue(refreshed["readiness"]["ready"])
         finished = self.store.finish_run("SUBMISSION_READY", "Fresh current checks are ready.")
-        self.assertTrue(finished["ok"], finished)
+        self.assertFalse(finished["ok"], finished)
+        self.assertEqual(finished["reason"], "PLAN_STALE_REPLAN_REQUIRED")
 
     def test_refresh_rejects_wrong_alpha_and_stale_timestamp(self):
         wrong = self.store.refresh_incumbent_result(
@@ -603,6 +630,97 @@ class CoreGuardTests(TestCase):
         self.assertTrue(opened["ok"], opened)
 
 
+    def test_candidate_inherits_same_warning_policy_from_incumbent(self):
+        store = guard.StateStore(Path(self.tempdir.name) / "warning-inherit.json", "WARNROOT")
+        self._initialize(
+            store,
+            checks=[
+                {"name": "LOW_SHARPE", "status": "FAIL", "value": 2.0, "limit": 2.69},
+                {
+                    "name": "UNITS",
+                    "status": "WARNING",
+                    "policy_classified": True,
+                    "policy_blocking": False,
+                },
+            ],
+        )
+        self._register(
+            store,
+            "E1",
+            "DIAGNOSTIC",
+            "LOW_SHARPE",
+            "BRAIN:test",
+            "A bounded Sharpe probe is justified.",
+        )
+        planned = self._set_plan(store)
+        self.assertTrue(planned["ok"], planned)
+        focused = store.set_focus(
+            "DEFECT",
+            "optimization/sharpe.md",
+            "SHARPE",
+            ["E1"],
+            blocker="LOW_SHARPE",
+            route_id="R1",
+        )
+        self.assertTrue(focused["ok"], focused)
+        opened = store.open_hypothesis(
+            "H_WARN",
+            {
+                "target": "SHARPE",
+                "mechanism": "signal_quality",
+                "principal_hypothesis": "The candidate should improve Sharpe without reducing Fitness.",
+                "mutation": {"type": "expression"},
+                "success_criteria": [
+                    {"type": "metric", "name": "SHARPE", "direction": "higher", "min_change": 0.01}
+                ],
+                "protected_metrics": [
+                    {"name": "FITNESS", "rule": "not_lower", "tolerance": 0.0}
+                ],
+                "failure_meaning": "Failure to improve Sharpe safely refutes this payload.",
+                "evidence_refs": ["E1"],
+                "complexity_reason": "One unary operation tests the declared mechanism.",
+            },
+        )
+        self.assertTrue(opened["ok"], opened)
+        candidate = {
+            "parent_id": "WARNROOT",
+            "hypothesis_id": "H_WARN",
+            "expression": "rank(-close)",
+            "fields": ["close"],
+            "settings": store.read()["incumbent"]["settings"],
+            "language": "FASTEXPR",
+        }
+        reserved = store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fp = reserved["fingerprint"]
+        self._post(store, fp, "SIM-WARN-INHERIT")
+        result = store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "WARN-CHILD",
+                "simulation_id": "SIM-WARN-INHERIT",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:get_submission_check",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.2, "FITNESS": 1.5, "TURNOVER": 0.2},
+                "checks": [
+                    {"name": "LOW_SHARPE", "status": "FAIL", "value": 2.2, "limit": 2.69},
+                    {"name": "UNITS", "status": "WARNING"},
+                ],
+            },
+        )
+        self.assertEqual(result["status"], "SUPPORTED", result)
+        self.assertNotIn("UNITS", result["evaluation"]["new_unresolved_checks"])
+        stored_warning = next(
+            row
+            for row in store.read()["hypotheses"]["H_WARN"]["result"]["evidence"]["checks"]
+            if row["name"] == "UNITS"
+        )
+        self.assertTrue(stored_warning["policy_classified"])
+        self.assertFalse(stored_warning["policy_blocking"])
+
+
     def test_new_unresolved_check_makes_candidate_inconclusive(self):
         self.assertTrue(self._set_plan()["ok"])
         self._open_focus()
@@ -629,6 +747,34 @@ class CoreGuardTests(TestCase):
         )
         self.assertEqual(result["status"], "INCONCLUSIVE", result)
         self.assertIn("NEW_PROJECT_WARNING", result["evaluation"]["new_unresolved_checks"])
+
+
+    def test_submission_ready_cannot_mask_no_promotion_optimizer_outcome(self):
+        store = guard.StateStore(Path(self.tempdir.name) / "ready-no-promotion.json", "READY")
+        self._initialize(
+            store,
+            checks=[{"name": "LOW_SHARPE", "status": "PASS", "value": 2.2, "limit": 1.58}],
+        )
+        state = store.read()
+        state["optimization_plan"] = {
+            "revision": 2,
+            "based_on_evidence_revision": 0,
+            "final_replan_used": True,
+            "status": "EXHAUSTED",
+            "routes": [],
+            "incumbent_alpha_id": "READY",
+            "synthesis": {"blockers": [], "enhancements": []},
+        }
+        store._write(state)
+        result = store.finish_run(
+            "SUBMISSION_READY",
+            "The Root is submission-ready but optimization found no better Incumbent.",
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["reason"],
+            "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
+        )
 
 
     def test_normal_completion_requires_initialized_state_but_forced_stop_does_not(self):
