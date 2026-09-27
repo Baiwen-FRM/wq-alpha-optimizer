@@ -2188,11 +2188,18 @@ class StateStore:
                     }
 
         current_blockers = _current_blockers(state)
-        required_enhancements = (
+        cycle_enhancements = (
             _enhancement_objectives_for_incumbent_cycle(state)
-            if final_replan and not current_blockers
+            if not current_blockers
             else []
         )
+        # Once an enhancement objective has been entered for this Incumbent,
+        # every later empty re-profile must prove that objective's remaining
+        # catalog method space is no longer actionable. This includes STALE
+        # re-profiles after a final re-plan/result refresh; otherwise a
+        # controller could consume final_replan, refresh the same Incumbent,
+        # and install routes=[] without the no-action proof.
+        required_enhancements = cycle_enhancements if not raw_routes else []
         synthesis = None
         synthesis_required = (
             state.get("planning_contract") == "v2"
