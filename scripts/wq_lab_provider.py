@@ -107,10 +107,84 @@ def _dedicated_check_snapshot_present(payload: dict) -> bool:
     return isinstance(values, dict) and isinstance(values.get("checks"), list)
 
 
+CHECK_STATUS_SEVERITY = {
+    "PASS": 0,
+    "WARNING": 1,
+    "PENDING": 2,
+    "UNKNOWN": 2,
+    "RUNNING": 2,
+    "PROCESSING": 2,
+    "FAIL": 3,
+}
+
+
+def _check_status_severity(status: str) -> int:
+    # Unknown platform statuses must never be allowed to hide behind PASS/WARNING.
+    # Guard will keep an unfamiliar non-PASS status unresolved.
+    return CHECK_STATUS_SEVERITY.get(str(status).upper(), 2)
+
+
+def _dedupe_list_values(values: list[Any]) -> list[Any]:
+    out: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        marker = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        out.append(copy.deepcopy(value))
+    return out
+
+
+def _merge_guard_check_group(rows: list[dict]) -> dict:
+    if len(rows) == 1:
+        return dict(rows[0])
+
+    worst = max(rows, key=lambda row: _check_status_severity(str(row.get("status") or "")))
+    merged = copy.deepcopy(worst)
+    merged["merged_count"] = len(rows)
+    merged["components"] = [copy.deepcopy(row) for row in rows]
+
+    all_keys = {
+        key
+        for row in rows
+        for key in row
+        if key not in {"name", "status", "result", "merged_count", "components"}
+    }
+    for key in sorted(all_keys):
+        present = [row[key] for row in rows if key in row]
+        if not present:
+            continue
+
+        # Preserve identical scalar/dict facts once at the top level.
+        if all(value == present[0] for value in present[1:]):
+            merged[key] = copy.deepcopy(present[0])
+            continue
+
+        # Platform checks such as MATCHES_THEMES may split detail lists across
+        # multiple same-name rows. Merge those lists deterministically.
+        if all(isinstance(value, list) for value in present):
+            merged[key] = _dedupe_list_values(
+                [item for value in present for item in value]
+            )
+            continue
+
+        # If the strictest-status row omits a fact that is unique across the
+        # sibling rows (for example multiplier on the PASS component), promote
+        # that fact without inventing a conflict resolution rule.
+        distinct = _dedupe_list_values(present)
+        if key not in merged and len(distinct) == 1:
+            merged[key] = copy.deepcopy(distinct[0])
+
+    return merged
+
+
 def _guard_checks(payload: dict) -> list[dict]:
     values = payload.get("is") if isinstance(payload, dict) and isinstance(payload.get("is"), dict) else payload
     checks = values.get("checks") if isinstance(values, dict) else None
-    rows = []
+
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
     for item in (checks if isinstance(checks, list) else []):
         if not isinstance(item, dict) or not item.get("name"):
             continue
@@ -121,8 +195,13 @@ def _guard_checks(payload: dict) -> list[dict]:
         row["name"] = str(item["name"])
         row["status"] = str(status).upper()
         row.pop("result", None)
-        rows.append(row)
-    return rows
+        name = row["name"]
+        if name not in grouped:
+            grouped[name] = []
+            order.append(name)
+        grouped[name].append(row)
+
+    return [_merge_guard_check_group(grouped[name]) for name in order]
 
 
 def result_evidence_snapshot(session, wq, alpha_id: str, simulation_id: str) -> dict:
