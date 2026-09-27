@@ -57,7 +57,7 @@ def _route_context_index(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _candidate_history(state: dict[str, Any]) -> list[dict[str, Any]]:
     incumbent = state.get("incumbent") if isinstance(state.get("incumbent"), dict) else {}
     incumbent_id = str(incumbent.get("alpha_id") or "")
-    before_metrics = {
+    current_incumbent_metrics = {
         str(key).upper(): float(value)
         for key, value in ((incumbent.get("result_evidence") or {}).get("metrics") or {}).items()
         if isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -81,6 +81,15 @@ def _candidate_history(state: dict[str, Any]) -> list[dict[str, Any]]:
         if incumbent_id and str(spec.get("parent_id") or "") != incumbent_id:
             continue
 
+        frozen_parent = candidate.get("parent_metrics")
+        baseline_source = "reserved_parent_metrics" if isinstance(frozen_parent, dict) else "current_incumbent_fallback"
+        before_metrics = {
+            str(key).upper(): float(value)
+            for key, value in (
+                frozen_parent if isinstance(frozen_parent, dict) else current_incumbent_metrics
+            ).items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        }
         after_metrics = {
             str(key).upper(): float(value)
             for key, value in (evidence.get("metrics") or {}).items()
@@ -120,6 +129,7 @@ def _candidate_history(state: dict[str, Any]) -> list[dict[str, Any]]:
                 "evidence_ref": result.get("evidence_ref") or candidate.get("result_evidence_ref"),
                 "metrics_before": before_metrics,
                 "metrics_after": after_metrics,
+                "metrics_before_source": baseline_source,
                 "metric_deltas": deltas,
                 "failed_success": failed_success,
                 "failed_protection": failed_protection,
