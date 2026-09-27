@@ -8,20 +8,14 @@ from typing import Any
 import optimizer_guard as guard
 
 
-def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
+def build_synthesis_scaffold(
+    state: dict[str, Any],
+    enhancements: list[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
     blockers = guard._current_blockers(state)
     revision = int(state.get("evidence_revision", 0))
     incumbent = state.get("incumbent") if isinstance(state.get("incumbent"), dict) else {}
     dashboard = state.get("dashboard_context") if isinstance(state.get("dashboard_context"), dict) else {}
-    run = state.get("run") if isinstance(state.get("run"), dict) else {}
-
-    raw_intake_path = None
-    if run.get("log_path") and run.get("run_id"):
-        log_path = Path(str(run["log_path"]))
-        candidate = log_path.parent / ".data" / str(run["run_id"]) / "intake.json"
-        if candidate.exists():
-            raw_intake_path = str(candidate)
-
     available_evidence = [
         {
             "id": evidence_id,
@@ -59,6 +53,29 @@ def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    enhancement_rows = []
+    for target, owner in (enhancements or []):
+        entry = guard._catalog_entry_for_enhancement(target, owner)
+        enhancement_rows.append(
+            {
+                "target": target,
+                "owner": owner,
+                "observation_refs": [],
+                "mechanisms": [
+                    {
+                        "id": f"ENHANCEMENT:{target}:{item['id']}",
+                        "mechanism": item["id"],
+                        "method_family": item["method_family"],
+                        "status": "UNASSESSED",
+                        "evidence_refs": [],
+                        "reasoning": "",
+                        "next_question": "",
+                    }
+                    for item in entry.get("mechanisms", [])
+                ],
+            }
+        )
+
     return {
         "incumbent_alpha_id": str(incumbent.get("alpha_id") or ""),
         "based_on_evidence_revision": revision,
@@ -68,9 +85,9 @@ def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
             "result_evidence": incumbent.get("result_evidence"),
             "fields": dashboard.get("fields", []),
             "visualization": dashboard.get("visualization", {}),
-            "raw_intake_path": raw_intake_path,
         },
         "blockers": rows,
+        "enhancements": enhancement_rows,
         "available_evidence": available_evidence,
         "instructions": {
             "statuses": [
@@ -80,7 +97,7 @@ def build_synthesis_scaffold(state: dict[str, Any]) -> dict[str, Any]:
                 "EXCLUDED",
             ],
             "rule": (
-                "Combine current evidence with the blocker owner's mechanism families. "
+                "Combine current evidence with the blocker or enhancement owner's mechanism families. "
                 "Do not claim the cause is known unless evidence supports it. "
                 "When evidence is limited, PLAUSIBLE_PROBE is preferred over pretending "
                 "a mechanism is proven or declaring exhaustion."
@@ -95,11 +112,21 @@ def main() -> int:
     )
     parser.add_argument("--state", required=True)
     parser.add_argument("--root-alpha-id", required=True)
+    parser.add_argument(
+        "--enhancement",
+        nargs=2,
+        action="append",
+        metavar=("TARGET", "OWNER"),
+        help="Add a blocker-free enhancement objective, e.g. TURNOVER optimization/turnover.md",
+    )
     parser.add_argument("--output")
     args = parser.parse_args()
 
     store = guard.StateStore(Path(args.state), args.root_alpha_id)
-    scaffold = build_synthesis_scaffold(store.read())
+    scaffold = build_synthesis_scaffold(
+        store.read(),
+        enhancements=[tuple(item) for item in (args.enhancement or [])],
+    )
     text = json.dumps(scaffold, ensure_ascii=False, indent=2)
     if args.output:
         path = Path(args.output)
