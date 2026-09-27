@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import html
 import json
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict
 
 
@@ -172,7 +174,7 @@ def _normalize_chart(raw: Any) -> Dict[str, Any]:
 
 
 def prepare_chart_snapshot(raw: Any, *, max_points: int = 32) -> Dict[str, Any]:
-    """Keep only a compact, deterministic chart projection in persistent state."""
+    """Keep a compact chart projection in embedded machine state, not as the user-facing chart."""
     chart = _normalize_chart(raw)
     total = len(chart["labels"])
     if total <= max_points:
@@ -199,18 +201,159 @@ def prepare_chart_snapshot(raw: Any, *, max_points: int = 32) -> Dict[str, Any]:
     }
 
 
-def _sparkline(values: list[float]) -> str:
-    if not values:
-        return ""
-    glyphs = "▁▂▃▄▅▆▇█"
-    lo, hi = min(values), max(values)
-    if lo == hi:
-        return glyphs[len(glyphs) // 2] * len(values)
-    span = hi - lo
-    return "".join(
-        glyphs[min(len(glyphs) - 1, max(0, round((value - lo) / span * (len(glyphs) - 1))))]
-        for value in values
+def _svg_text(value: Any) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def _chart_svg_group(
+    chart: Dict[str, Any],
+    *,
+    y_offset: int,
+    width: int,
+    panel_height: int,
+) -> list[str]:
+    left, right, top, bottom = 82, 28, 54, 58
+    plot_w = width - left - right
+    plot_h = panel_height - top - bottom
+    all_values = [value for row in chart["series"] for value in row["values"]]
+    ymin, ymax = min(all_values), max(all_values)
+    if chart["type"] == "bar":
+        ymin = min(ymin, 0.0)
+        ymax = max(ymax, 0.0)
+    if ymin == ymax:
+        pad = abs(ymin) * 0.05 or 1.0
+    else:
+        pad = (ymax - ymin) * 0.08
+    ymin, ymax = ymin - pad, ymax + pad
+
+    def x_at(index: int) -> float:
+        count = len(chart["labels"])
+        if chart["type"] == "bar":
+            return left + (index + 0.5) * plot_w / max(count, 1)
+        return left + index * plot_w / max(count - 1, 1)
+
+    def y_at(value: float) -> float:
+        return top + (ymax - value) * plot_h / (ymax - ymin)
+
+    palette = ["#2f80ed", "#27ae60", "#f2994a", "#9b51e0", "#eb5757", "#56ccf2"]
+    pieces = [
+        f'<g transform="translate(0,{y_offset})">',
+        f'<rect x="0" y="0" width="{width}" height="{panel_height}" fill="white"/>',
+        f'<text x="{left}" y="30" font-family="Arial,sans-serif" font-size="18" '
+        f'font-weight="600" fill="#222">{_svg_text(chart["title"])}</text>',
+    ]
+
+    for tick in range(5):
+        value = ymin + (ymax - ymin) * tick / 4
+        y = y_at(value)
+        pieces.append(
+            f'<line x1="{left}" y1="{y:.2f}" x2="{width-right}" y2="{y:.2f}" '
+            'stroke="#e6e6e6" stroke-width="1"/>'
+        )
+        pieces.append(
+            f'<text x="{left-10}" y="{y+4:.2f}" text-anchor="end" '
+            f'font-family="Arial,sans-serif" font-size="11" fill="#666">{value:.4g}</text>'
+        )
+
+    labels = chart["labels"]
+    label_step = max(1, math.ceil(len(labels) / 8))
+    shown = set(range(0, len(labels), label_step))
+    shown.add(len(labels) - 1)
+    for index in sorted(shown):
+        x = x_at(index)
+        pieces.append(
+            f'<text x="{x:.2f}" y="{panel_height-28}" text-anchor="middle" '
+            f'font-family="Arial,sans-serif" font-size="10" fill="#666">'
+            f'{_svg_text(labels[index][:18])}</text>'
+        )
+
+    if chart["type"] == "line":
+        for series_index, series in enumerate(chart["series"]):
+            color = palette[series_index % len(palette)]
+            points = " ".join(
+                f"{x_at(index):.2f},{y_at(value):.2f}"
+                for index, value in enumerate(series["values"])
+            )
+            pieces.append(
+                f'<polyline fill="none" stroke="{color}" stroke-width="1.8" '
+                f'stroke-linejoin="round" stroke-linecap="round" points="{points}"/>'
+            )
+    else:
+        count = len(labels)
+        group_w = plot_w / max(count, 1)
+        gap = min(group_w * 0.14, 10.0)
+        bar_w = max(1.0, (group_w - 2 * gap) / max(len(chart["series"]), 1))
+        zero_y = y_at(0.0) if ymin <= 0 <= ymax else y_at(ymin)
+        for series_index, series in enumerate(chart["series"]):
+            color = palette[series_index % len(palette)]
+            for index, value in enumerate(series["values"]):
+                x = left + index * group_w + gap + series_index * bar_w
+                y = y_at(value)
+                rect_y = min(y, zero_y)
+                rect_h = max(1.0, abs(zero_y - y))
+                pieces.append(
+                    f'<rect x="{x:.2f}" y="{rect_y:.2f}" width="{bar_w*0.88:.2f}" '
+                    f'height="{rect_h:.2f}" fill="{color}" opacity="0.88"/>'
+                )
+
+    if len(chart["series"]) > 1:
+        legend_x = left
+        legend_y = panel_height - 8
+        for series_index, series in enumerate(chart["series"]):
+            color = palette[series_index % len(palette)]
+            pieces.append(
+                f'<rect x="{legend_x}" y="{legend_y-10}" width="10" height="10" fill="{color}"/>'
+            )
+            pieces.append(
+                f'<text x="{legend_x+14}" y="{legend_y}" font-family="Arial,sans-serif" '
+                f'font-size="10" fill="#555">{_svg_text(series["name"][:24])}</text>'
+            )
+            legend_x += 175
+
+    pieces.append(
+        f'<line x1="24" y1="{panel_height-1}" x2="{width-24}" y2="{panel_height-1}" '
+        'stroke="#d9d9d9" stroke-width="1"/>'
     )
+    pieces.append("</g>")
+    return pieces
+
+
+def write_dashboard_svg(state: Dict[str, Any], raw_charts: list[Any]) -> str | None:
+    charts = [_normalize_chart(chart) for chart in raw_charts]
+    if not charts:
+        return None
+
+    run = state.get("run") or {}
+    raw_log_path = run.get("log_path")
+    if not raw_log_path:
+        raise ValueError("run log is required before SVG dashboard rendering")
+    log_path = Path(str(raw_log_path)).expanduser().resolve()
+    filename = f"{log_path.stem}_dashboard.svg"
+    target = log_path.with_name(filename)
+
+    width = 1100
+    panel_height = 330
+    header_height = 46
+    total_height = header_height + panel_height * len(charts)
+    pieces = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{total_height}" '
+        f'viewBox="0 0 {width} {total_height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="24" y="30" font-family="Arial,sans-serif" font-size="20" '
+        f'font-weight="700" fill="#111">Alpha Visualization Dashboard</text>',
+    ]
+    for index, chart in enumerate(charts):
+        pieces.extend(
+            _chart_svg_group(
+                chart,
+                y_offset=header_height + index * panel_height,
+                width=width,
+                panel_height=panel_height,
+            )
+        )
+    pieces.append("</svg>")
+    target.write_text("\n".join(pieces) + "\n", encoding="utf-8")
+    return filename
 
 
 def enrich_context_with_charts(state: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,7 +388,12 @@ def enrich_context_with_charts(state: Dict[str, Any], payload: Dict[str, Any]) -
             if charts is not None and not isinstance(charts, list):
                 raise ValueError("visualization.charts must be a list")
             if charts is not None:
+                asset = write_dashboard_svg(state, charts)
                 vis["charts"] = [prepare_chart_snapshot(chart) for chart in charts]
+                if asset:
+                    vis["asset"] = asset
+                else:
+                    vis.pop("asset", None)
             context["visualization"] = vis
     return context
 
@@ -268,29 +416,28 @@ def _render_visualization(context: Dict[str, Any]) -> str:
             out += f"- {_cell(item)}\n"
     elif summary:
         out += f"- {_cell(summary)}\n"
-    for chart in vis.get("charts") or []:
-        if not isinstance(chart, dict):
-            continue
-        title = chart.get("title") or chart.get("id") or "Visualization"
-        out += f"\n**{_cell(title)}**\n"
-        labels = chart.get("labels") or []
-        if labels:
-            out += f"- X range: {_cell(labels[0])} → {_cell(labels[-1])}"
-            if chart.get("sampled"):
-                out += f" (sampled {len(labels)} of {_cell(chart.get('original_point_count'))} points)"
-            out += "\n"
-        for series in chart.get("series") or []:
-            if not isinstance(series, dict):
-                continue
-            values = [float(v) for v in series.get("values") or []]
-            if not values:
-                continue
-            out += (
-                f"- {_cell(series.get('name') or 'Value')}: "
-                f"{_sparkline(values)} "
-                f"(min={_cell(min(values))}, max={_cell(max(values))})\n"
-            )
+
+    chart_rows = [row for row in (vis.get("charts") or []) if isinstance(row, dict)]
+    if chart_rows:
+        out += "- Charts: " + _cell(
+            "; ".join(str(row.get("title") or row.get("id") or "Visualization") for row in chart_rows)
+        ) + "\n"
+
+    asset = vis.get("asset")
+    if asset:
+        chart_count = len(chart_rows)
+        out += (
+            f"\n**Visualization Dashboard ({chart_count} chart"
+            f"{'s' if chart_count != 1 else ''})**\n\n"
+            f"![Visualization Dashboard]({_cell(asset)})\n"
+        )
+    elif vis.get("charts"):
+        out += (
+            "\n_Chart metadata is present, but this legacy run has no SVG dashboard asset. "
+            "Refresh the dashboard to render the SVG._\n"
+        )
     return out or "_Visualization metadata is present but no renderable content was supplied._\n"
+
 
 
 def render_dashboard(state: Dict[str, Any]) -> str:

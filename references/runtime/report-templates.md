@@ -20,7 +20,7 @@
    - diagnostic Alpha ID / control 说明；
    - 实际取得的 recordset 名称；
    - 关键摘要；
-   - 有可审计数值序列时生成轻量 SVG：ordered time/PnL 用 line，bucket/cap/sector/industry 对比用 bar；不补点、不平滑、不猜缺失值。
+   - 有可审计数值序列时生成真正的 SVG 图表：ordered time/PnL 用 line，bucket/cap/sector/industry 对比用 bar；不补点、不平滑、不猜缺失值。一个 run 的所有可绘制 chart 合并到同一个 `<run>_dashboard.svg` 中，MD 只引用这个 companion SVG；不得用 Unicode sparkline 替代主图，也不得恢复每-chart asset 文件。
 5. **Optimization Progression**
    - 已有 result 的 hypothesis / candidate Alpha / mechanism / status / Sharpe/Fitness/Returns/Margin/Turnover / new blockers。
 

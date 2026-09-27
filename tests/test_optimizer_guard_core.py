@@ -974,11 +974,21 @@ class CoreGuardTests(TestCase):
         self.assertIn("### 4. Visualization / Diagnostics", text)
         self.assertIn("Closing price", text)
         self.assertIn("Sharpe by capitalization bucket", text)
-        self.assertRegex(text, r"[▁▂▃▄▅▆▇█]{5}")
+        self.assertNotRegex(text, r"[▁▂▃▄▅▆▇█]")
         self.assertLess(text.index("## Alpha Snapshot / Dashboard"), text.index("## Audit Trail"))
-        charts = self.store.read()["dashboard_context"]["visualization"]["charts"]
+
+        visualization = self.store.read()["dashboard_context"]["visualization"]
+        charts = visualization["charts"]
         self.assertEqual(charts[0]["original_point_count"], 5)
         self.assertNotIn("asset", charts[0])
+        self.assertTrue(visualization["asset"].endswith("_dashboard.svg"))
+
+        svg_path = log_path.with_name(visualization["asset"])
+        self.assertTrue(svg_path.exists(), svg_path)
+        svg = svg_path.read_text(encoding="utf-8")
+        self.assertIn("<svg", svg)
+        self.assertIn("Sharpe by capitalization bucket", svg)
+        self.assertIn('opacity="0.88"', svg)
         self.assertFalse((log_path.parent / "assets").exists())
 
     def test_stale_concurrent_state_write_is_rejected_without_data_loss(self):
