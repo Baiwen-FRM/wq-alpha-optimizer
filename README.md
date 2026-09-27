@@ -114,6 +114,9 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - candidate evaluation is asymmetric by design: decisive negative mechanism evidence can produce `REFUTED` before unrelated safety checks finish, while `SUPPORTED`/promotion still requires the complete safe snapshot;
 - same-name WARNING policy is inherited from the current Incumbent; new WARNING names remain unresolved;
 - if optimization finishes without promotion, the run reports `COMPLETED_WITH_EXHAUSTION` rather than using Root submission readiness as a proxy for optimization success;
+- every conclusive candidate Result is fed back into the next mechanism-synthesis scaffold as structured candidate history (before/after metrics, deltas, failed criteria/protections, new blockers, route/method-family context);
+- blocker-free enhancement objectives entered in the current Incumbent cycle survive STALE re-profiles: any later empty plan must still prove the remaining catalog method space, even after the one final re-plan has already been consumed;
+- normal in-scope route/hypothesis selection is controller-owned rather than an AskUserQuestion handoff; user input is reserved for scope expansion, conflicting goals, or genuinely missing official semantics;
 - the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
 
 
