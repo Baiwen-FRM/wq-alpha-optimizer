@@ -1176,6 +1176,32 @@ def _novel_post_activation_evidence(
     return evidence
 
 
+def _mechanism_specific_route_evidence(
+    state: Dict[str, Any],
+    route: Dict[str, Any],
+    evidence_ref: str | None,
+    activated_at_evidence_revision: int,
+) -> Dict[str, Any] | None:
+    evidence = _novel_post_activation_evidence(
+        state,
+        evidence_ref,
+        activated_at_evidence_revision,
+    )
+    if evidence is None:
+        return None
+    mechanism = str(route.get("mechanism") or "")
+    if not mechanism:
+        return None
+    acceptable_subjects = {mechanism, f"MECHANISM:{mechanism}"}
+    if (
+        str(evidence.get("kind") or "").upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
+        and str(evidence.get("source") or "").startswith("BRAIN:")
+        and str(evidence.get("subject") or "") in acceptable_subjects
+    ):
+        return evidence
+    return None
+
+
 def _route_closure_rejection(
     state: Dict[str, Any],
     route: Dict[str, Any],
@@ -1197,20 +1223,15 @@ def _route_closure_rejection(
     )
     evidence = _novel_post_activation_evidence(state, evidence_ref, activated_revision)
     if evidence is not None:
-        mechanism = str(route.get("mechanism") or "")
-        acceptable_subjects = {mechanism, f"MECHANISM:{mechanism}"}
-        if (
-            str(evidence.get("kind") or "").upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
-            and str(evidence.get("source") or "").startswith("BRAIN:")
-            and str(evidence.get("subject") or "") in acceptable_subjects
-        ):
+        if _mechanism_specific_route_evidence(state, route, evidence_ref, activated_revision) is not None:
             return None
+        mechanism = str(route.get("mechanism") or "")
         return {
             "ok": False,
             "reason": "ROUTE_CLOSURE_EVIDENCE_NOT_MECHANISM_SPECIFIC",
             "route_id": route.get("id"),
             "evidence_ref": evidence_ref,
-            "required_subjects": sorted(acceptable_subjects),
+            "required_subjects": sorted({mechanism, f"MECHANISM:{mechanism}"}),
             "required_kinds": ["DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"],
         }
 
@@ -1256,7 +1277,7 @@ def _terminal_route_attempt_violations(state: Dict[str, Any]) -> list[Dict[str, 
                 )
             )
             evidence_ref = route.get("zero_candidate_closure_evidence_ref")
-            if _novel_post_activation_evidence(state, evidence_ref, activated_revision) is not None:
+            if _mechanism_specific_route_evidence(state, route, evidence_ref, activated_revision) is not None:
                 continue
             violations.append(
                 {
