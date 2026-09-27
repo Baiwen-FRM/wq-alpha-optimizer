@@ -366,6 +366,33 @@ def _normalize_checks(checks: Any) -> list[Dict[str, Any]]:
     return out
 
 
+def _inherit_warning_policy(reference_checks: Any, current_checks: Any) -> list[Dict[str, Any]]:
+    """Normalize current checks and inherit explicit policy for the same WARNING.
+
+    Policy is decided once on the current Incumbent. Candidate/refresh snapshots
+    must not silently lose that decision, while genuinely new WARNING names stay
+    unresolved until explicitly classified.
+    """
+    reference = _normalize_checks(reference_checks)
+    current = _normalize_checks(current_checks)
+    reference_map = {row["name"]: row for row in reference}
+    out: list[Dict[str, Any]] = []
+    for row in current:
+        if row["status"] == "WARNING" and not row.get("policy_classified"):
+            prior = reference_map.get(row["name"])
+            if (
+                isinstance(prior, dict)
+                and prior.get("status") == "WARNING"
+                and prior.get("policy_classified")
+            ):
+                row = dict(row)
+                row["policy_classified"] = True
+                row["policy_blocking"] = bool(prior.get("policy_blocking", False))
+                row["blocking"] = bool(row["policy_blocking"])
+        out.append(row)
+    return out
+
+
 def _normalize_metrics(metrics: Any) -> Dict[str, float]:
     if metrics is None:
         return {}
@@ -446,7 +473,7 @@ def candidate_result_pending_observations(
     missing = hypothesis_observation_schema_missing(contract, after)
     try:
         before_checks = _normalize_checks((before or {}).get("checks"))
-        after_checks = _normalize_checks((after or {}).get("checks"))
+        after_checks = _inherit_warning_policy(before_checks, (after or {}).get("checks"))
     except ValueError:
         return sorted(set([*missing, "result_evidence:invalid"]))
 
@@ -936,7 +963,8 @@ def _route_candidate_result_count(state: Dict[str, Any], route_id: str, incumben
         spec = candidate.get("spec") if isinstance(candidate.get("spec"), dict) else {}
         if incumbent_alpha_id is not None and str(spec.get("parent_id")) != str(incumbent_alpha_id):
             continue
-        if candidate.get("result_evaluation") is not None:
+        evaluation = candidate.get("result_evaluation")
+        if isinstance(evaluation, dict) and evaluation.get("status") in {"SUPPORTED", "REFUTED"}:
             count += 1
     return count
 
@@ -985,7 +1013,22 @@ def _route_closure_rejection(
     )
     evidence = _novel_post_activation_evidence(state, evidence_ref, activated_revision)
     if evidence is not None:
-        return None
+        mechanism = str(route.get("mechanism") or "")
+        acceptable_subjects = {mechanism, f"MECHANISM:{mechanism}"}
+        if (
+            str(evidence.get("kind") or "").upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
+            and str(evidence.get("source") or "").startswith("BRAIN:")
+            and str(evidence.get("subject") or "") in acceptable_subjects
+        ):
+            return None
+        return {
+            "ok": False,
+            "reason": "ROUTE_CLOSURE_EVIDENCE_NOT_MECHANISM_SPECIFIC",
+            "route_id": route.get("id"),
+            "evidence_ref": evidence_ref,
+            "required_subjects": sorted(acceptable_subjects),
+            "required_kinds": ["DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"],
+        }
 
     return {
         "ok": False,
@@ -1312,7 +1355,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     before_metrics = _normalize_metrics((before or {}).get("metrics"))
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
     before_checks = _normalize_checks((before or {}).get("checks"))
-    after_checks = _normalize_checks((after or {}).get("checks"))
+    after_checks = _inherit_warning_policy(before_checks, (after or {}).get("checks"))
     before_check_map = _check_row_map(before_checks)
     after_check_map = _check_row_map(after_checks)
 
@@ -1418,7 +1461,19 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     candidate_unresolved = _unresolved_checks(after_checks)
     new_unresolved = candidate_unresolved - old_unresolved
 
-    if missing or new_unresolved:
+    # A conjunctive hypothesis is decisively refuted as soon as any observed
+    # success criterion/protected metric fails, or the mutation creates a new
+    # blocker. Unrelated pending/missing safety checks cannot erase that negative
+    # mechanism evidence. By contrast, SUPPORTED still requires a complete safe
+    # snapshot with no new unresolved checks.
+    decisive_failure = (
+        any(not item["passed"] for item in criterion_results)
+        or any(not item["passed"] for item in protected_results)
+        or bool(new_blockers)
+    )
+    if decisive_failure:
+        status = "REFUTED"
+    elif missing or new_unresolved:
         status = "INCONCLUSIVE"
     elif (
         criterion_results
@@ -1720,7 +1775,10 @@ class StateStore:
         try:
             observed = _parse_iso(result_evidence.get("observed_at"))
             metrics = _normalize_metrics(result_evidence.get("metrics"))
-            checks = _normalize_checks(result_evidence.get("checks"))
+            checks = _inherit_warning_policy(
+                (incumbent.get("result_evidence") or {}).get("checks"),
+                result_evidence.get("checks"),
+            )
         except ValueError as exc:
             return {"ok": False, "reason": "RESULT_REFRESH_CONTRACT", "detail": str(exc)}
         if not result_evidence.get("response_complete") or not result_evidence.get("authenticated"):
