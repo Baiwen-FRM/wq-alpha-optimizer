@@ -134,6 +134,75 @@ class WQLabProviderTests(TestCase):
         self.assertFalse(baseline["result_evidence"]["response_complete"])
         self.assertIn("checks_fallback", baseline["result_evidence"]["source"])
 
+    def test_guard_checks_merges_duplicate_platform_rows_by_name(self):
+        payload = {
+            "is": {
+                "checks": [
+                    {
+                        "name": "MATCHES_THEMES",
+                        "result": "PASS",
+                        "multiplier": 2.68,
+                        "themes": [
+                            {"name": "Theme A"},
+                            {"name": "Theme B"},
+                            {"name": "Theme C"},
+                        ],
+                    },
+                    {
+                        "name": "MATCHES_THEMES",
+                        "result": "WARNING",
+                        "themes": [
+                            {"name": "Theme C"},
+                            {"name": "GLB/Dl1 Liquid Power Pool Aug'26"},
+                        ],
+                        "message": "One newly returned theme is not matched.",
+                    },
+                    {
+                        "name": "LOW_SHARPE",
+                        "result": "PASS",
+                        "value": 2.16,
+                        "limit": 1.58,
+                    },
+                ]
+            }
+        }
+
+        checks = provider._guard_checks(payload)
+        self.assertEqual([row["name"] for row in checks], ["MATCHES_THEMES", "LOW_SHARPE"])
+
+        merged = checks[0]
+        self.assertEqual(merged["status"], "WARNING")
+        self.assertEqual(merged["merged_count"], 2)
+        self.assertEqual(merged["multiplier"], 2.68)
+        self.assertEqual(
+            [row["name"] for row in merged["themes"]],
+            ["Theme A", "Theme B", "Theme C", "GLB/Dl1 Liquid Power Pool Aug'26"],
+        )
+        self.assertEqual(len(merged["components"]), 2)
+        self.assertEqual(
+            [row["status"] for row in merged["components"]],
+            ["PASS", "WARNING"],
+        )
+        self.assertEqual(checks[1]["status"], "PASS")
+
+    def test_guard_checks_uses_strictest_status_for_duplicate_rows(self):
+        payload = {
+            "is": {
+                "checks": [
+                    {"name": "DUP", "result": "PASS"},
+                    {"name": "DUP", "result": "WARNING"},
+                    {"name": "DUP", "result": "PENDING"},
+                    {"name": "DUP", "result": "FAIL"},
+                ]
+            }
+        }
+
+        checks = provider._guard_checks(payload)
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0]["name"], "DUP")
+        self.assertEqual(checks[0]["status"], "FAIL")
+        self.assertEqual(checks[0]["merged_count"], 4)
+
     def test_result_evidence_snapshot_uses_current_result_and_dedicated_checks(self):
         class FakeWQ:
             @staticmethod
