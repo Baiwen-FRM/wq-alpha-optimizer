@@ -707,6 +707,166 @@ def _current_blockers(state: Dict[str, Any]) -> list[str]:
     return sorted(_fail_blockers(checks))
 
 
+def _catalog_entry_for_enhancement(target: str, owner: str) -> Dict[str, Any]:
+    """Return the catalog method space for a blocker-free enhancement objective."""
+    target = str(target).strip()
+    owner = str(owner).strip()
+    matches: list[tuple[str, Dict[str, Any]]] = []
+    for key, entry in _load_mechanism_catalog()["blockers"].items():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("target") or "").strip() == target and str(entry.get("owner") or "").strip() == owner:
+            matches.append((str(key), entry))
+    if not matches:
+        raise ValueError(f"no mechanism catalog entry for enhancement target={target} owner={owner}")
+
+    mechanisms: list[Dict[str, Any]] = []
+    seen = set()
+    for _key, entry in matches:
+        for item in entry.get("mechanisms", []):
+            if not isinstance(item, dict) or not item.get("method_family"):
+                continue
+            signature = (str(item.get("id") or ""), str(item.get("method_family") or ""))
+            if signature in seen:
+                continue
+            seen.add(signature)
+            mechanisms.append(dict(item))
+    return {
+        "target": target,
+        "owner": owner,
+        "catalog_keys": [key for key, _entry in matches],
+        "mechanisms": mechanisms,
+    }
+
+
+def _normalize_synthesis_observations(
+    refs: Any,
+    *,
+    state: Dict[str, Any],
+    based_on_evidence_revision: int,
+) -> list[str]:
+    if not isinstance(refs, list) or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+        raise ValueError("synthesis observation_refs must be a string list")
+    normalized = sorted(dict.fromkeys(ref.strip() for ref in refs))
+    for ref in normalized:
+        evidence = state.get("evidence", {}).get(ref)
+        if not isinstance(evidence, dict):
+            raise ValueError(f"unknown synthesis observation ref: {ref}")
+        if int(evidence.get("revision", 0)) > based_on_evidence_revision:
+            raise ValueError(f"synthesis observation newer than plan snapshot: {ref}")
+    return normalized
+
+
+def _normalize_synthesis_assessments(
+    raw_assessments: Any,
+    *,
+    label: str,
+    entry: Dict[str, Any],
+    state: Dict[str, Any],
+    based_on_evidence_revision: int,
+    seen_assessment_ids: set[str],
+) -> tuple[list[Dict[str, Any]], list[str], list[str]]:
+    if not isinstance(raw_assessments, list) or not raw_assessments:
+        raise ValueError(f"synthesis {label} needs mechanisms")
+
+    allowed_method_families = {
+        str(item.get("method_family"))
+        for item in entry.get("mechanisms", [])
+        if isinstance(item, dict) and item.get("method_family")
+    }
+    assessments: list[Dict[str, Any]] = []
+    for item in raw_assessments:
+        if not isinstance(item, dict):
+            raise ValueError("mechanism assessment must be an object")
+        required = ("id", "mechanism", "method_family", "status", "reasoning", "next_question", "evidence_refs")
+        missing = [key for key in required if not _nonempty(item.get(key))]
+        if missing:
+            raise ValueError(f"mechanism assessment missing: {', '.join(missing)}")
+        aid = str(item["id"]).strip()
+        if aid in seen_assessment_ids:
+            raise ValueError(f"duplicate mechanism assessment id: {aid}")
+        seen_assessment_ids.add(aid)
+        mechanism = str(item["mechanism"]).strip()
+        method_family = str(item["method_family"]).strip()
+        if allowed_method_families and method_family not in allowed_method_families:
+            raise ValueError(
+                f"method_family not in current owner catalog for {label}: {method_family}"
+            )
+        status = str(item["status"]).upper()
+        if status not in SYNTHESIS_STATUSES:
+            raise ValueError(f"invalid mechanism assessment status: {status}")
+        refs = item["evidence_refs"]
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+            raise ValueError("mechanism assessment evidence_refs must be a non-empty string list")
+        refs = sorted(dict.fromkeys(ref.strip() for ref in refs))
+        for ref in refs:
+            evidence = state.get("evidence", {}).get(ref)
+            if not isinstance(evidence, dict):
+                raise ValueError(f"unknown mechanism evidence ref: {ref}")
+            if int(evidence.get("revision", 0)) > based_on_evidence_revision:
+                raise ValueError(f"mechanism evidence newer than plan snapshot: {ref}")
+        normalized_item = {
+            "id": aid,
+            "mechanism": mechanism,
+            "method_family": method_family,
+            "status": status,
+            "evidence_refs": refs,
+            "reasoning": str(item["reasoning"]).strip(),
+            "next_question": str(item["next_question"]).strip(),
+        }
+        if status == "EXCLUDED":
+            basis = str(item.get("exclusion_basis") or "").upper()
+            if basis not in SYNTHESIS_EXCLUSION_BASES:
+                raise ValueError(
+                    "EXCLUDED mechanism requires exclusion_basis="
+                    "CURRENT_DIAGNOSTIC/CURRENT_CANDIDATE_RESULT/SCOPE_BOUNDARY"
+                )
+            evidence_rows = [state["evidence"][ref] for ref in refs]
+            expected_subjects = {
+                mechanism,
+                f"MECHANISM:{mechanism}",
+                method_family,
+                f"METHOD_FAMILY:{method_family}",
+            }
+            if basis == "CURRENT_DIAGNOSTIC":
+                if not any(
+                    str(row.get("kind", "")).upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
+                    and str(row.get("source", "")).startswith("BRAIN:")
+                    and str(row.get("subject", "")) in expected_subjects
+                    for row in evidence_rows
+                ):
+                    raise ValueError(
+                        "CURRENT_DIAGNOSTIC exclusion requires mechanism/method-family-specific "
+                        "BRAIN diagnostic-exclusion evidence"
+                    )
+            elif basis == "CURRENT_CANDIDATE_RESULT":
+                if not any(
+                    str(row.get("kind", "")).upper() == "CANDIDATE_RESULT"
+                    and str(row.get("source", "")).startswith("BRAIN:")
+                    and str(row.get("subject", "")) in expected_subjects
+                    for row in evidence_rows
+                ):
+                    raise ValueError(
+                        "CURRENT_CANDIDATE_RESULT exclusion requires mechanism/method-family-specific "
+                        "BRAIN CANDIDATE_RESULT evidence"
+                    )
+            elif basis == "SCOPE_BOUNDARY":
+                if not any(
+                    str(row.get("kind", "")).upper() == "SCOPE_BOUNDARY"
+                    and str(row.get("subject", "")) in expected_subjects
+                    for row in evidence_rows
+                ):
+                    raise ValueError(
+                        "SCOPE_BOUNDARY exclusion requires mechanism/method-family-specific "
+                        "SCOPE_BOUNDARY evidence"
+                    )
+            normalized_item["exclusion_basis"] = basis
+        assessments.append(normalized_item)
+
+    covered_method_families = sorted({str(item.get("method_family")) for item in assessments})
+    return assessments, sorted(allowed_method_families), covered_method_families
+
+
 def _normalize_synthesis(
     synthesis: Any,
     state: Dict[str, Any],
@@ -714,13 +874,18 @@ def _normalize_synthesis(
 ) -> Dict[str, Any]:
     if not isinstance(synthesis, dict):
         raise ValueError("plan synthesis must be an object")
-    raw_blockers = synthesis.get("blockers")
+    raw_blockers = synthesis.get("blockers", [])
+    raw_enhancements = synthesis.get("enhancements", [])
     if not isinstance(raw_blockers, list):
         raise ValueError("plan synthesis.blockers must be a list")
+    if not isinstance(raw_enhancements, list):
+        raise ValueError("plan synthesis.enhancements must be a list")
 
     current_blockers = _current_blockers(state)
-    rows: list[Dict[str, Any]] = []
+    blocker_rows: list[Dict[str, Any]] = []
+    enhancement_rows: list[Dict[str, Any]] = []
     seen_blockers: set[str] = set()
+    seen_enhancements: set[tuple[str, str]] = set()
     seen_assessment_ids: set[str] = set()
 
     for raw in raw_blockers:
@@ -741,129 +906,27 @@ def _normalize_synthesis(
         if expected_owner and owner != expected_owner:
             raise ValueError(f"synthesis blocker owner mismatch for {name}: {owner} != {expected_owner}")
 
-        observations = raw.get("observation_refs", [])
-        if not isinstance(observations, list) or any(not isinstance(ref, str) or not ref.strip() for ref in observations):
-            raise ValueError("synthesis observation_refs must be a string list")
-        observations = sorted(dict.fromkeys(ref.strip() for ref in observations))
-        for ref in observations:
-            evidence = state.get("evidence", {}).get(ref)
-            if not isinstance(evidence, dict):
-                raise ValueError(f"unknown synthesis observation ref: {ref}")
-            if int(evidence.get("revision", 0)) > based_on_evidence_revision:
-                raise ValueError(f"synthesis observation newer than plan snapshot: {ref}")
-
-        raw_assessments = raw.get("mechanisms")
-        if not isinstance(raw_assessments, list) or not raw_assessments:
-            raise ValueError(f"synthesis blocker {name} needs mechanisms")
-
-        allowed_method_families = {
-            str(item.get("method_family"))
-            for item in entry.get("mechanisms", [])
-            if isinstance(item, dict) and item.get("method_family")
-        }
-        assessments: list[Dict[str, Any]] = []
-        for item in raw_assessments:
-            if not isinstance(item, dict):
-                raise ValueError("mechanism assessment must be an object")
-            required = ("id", "mechanism", "method_family", "status", "reasoning", "next_question", "evidence_refs")
-            missing = [key for key in required if not _nonempty(item.get(key))]
-            if missing:
-                raise ValueError(f"mechanism assessment missing: {', '.join(missing)}")
-            aid = str(item["id"]).strip()
-            if aid in seen_assessment_ids:
-                raise ValueError(f"duplicate mechanism assessment id: {aid}")
-            seen_assessment_ids.add(aid)
-            mechanism = str(item["mechanism"]).strip()
-            method_family = str(item["method_family"]).strip()
-            if allowed_method_families and method_family not in allowed_method_families:
-                raise ValueError(
-                    f"method_family not in current owner catalog for {name}: {method_family}"
-                )
-            status = str(item["status"]).upper()
-            if status not in SYNTHESIS_STATUSES:
-                raise ValueError(f"invalid mechanism assessment status: {status}")
-            refs = item["evidence_refs"]
-            if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
-                raise ValueError("mechanism assessment evidence_refs must be a non-empty string list")
-            refs = sorted(dict.fromkeys(ref.strip() for ref in refs))
-            for ref in refs:
-                evidence = state.get("evidence", {}).get(ref)
-                if not isinstance(evidence, dict):
-                    raise ValueError(f"unknown mechanism evidence ref: {ref}")
-                if int(evidence.get("revision", 0)) > based_on_evidence_revision:
-                    raise ValueError(f"mechanism evidence newer than plan snapshot: {ref}")
-            normalized_item = {
-                "id": aid,
-                "mechanism": mechanism,
-                "method_family": method_family,
-                "status": status,
-                "evidence_refs": refs,
-                "reasoning": str(item["reasoning"]).strip(),
-                "next_question": str(item["next_question"]).strip(),
-            }
-            if status == "EXCLUDED":
-                basis = str(item.get("exclusion_basis") or "").upper()
-                if basis not in SYNTHESIS_EXCLUSION_BASES:
-                    raise ValueError(
-                        "EXCLUDED mechanism requires exclusion_basis="
-                        "CURRENT_DIAGNOSTIC/CURRENT_CANDIDATE_RESULT/SCOPE_BOUNDARY"
-                    )
-                evidence_rows = [state["evidence"][ref] for ref in refs]
-                mechanism_subjects = {
-                    mechanism,
-                    f"MECHANISM:{mechanism}",
-                }
-                family_subjects = {
-                    method_family,
-                    f"METHOD_FAMILY:{method_family}",
-                }
-                expected_subjects = mechanism_subjects | family_subjects
-                if basis == "CURRENT_DIAGNOSTIC":
-                    if not any(
-                        str(row.get("kind", "")).upper() in {"DIAGNOSTIC_EXCLUSION", "ROUTE_DIAGNOSTIC"}
-                        and str(row.get("source", "")).startswith("BRAIN:")
-                        and str(row.get("subject", "")) in expected_subjects
-                        for row in evidence_rows
-                    ):
-                        raise ValueError(
-                            "CURRENT_DIAGNOSTIC exclusion requires mechanism/method-family-specific "
-                            "BRAIN diagnostic-exclusion evidence"
-                        )
-                elif basis == "CURRENT_CANDIDATE_RESULT":
-                    if not any(
-                        str(row.get("kind", "")).upper() == "CANDIDATE_RESULT"
-                        and str(row.get("source", "")).startswith("BRAIN:")
-                        and str(row.get("subject", "")) in expected_subjects
-                        for row in evidence_rows
-                    ):
-                        raise ValueError(
-                            "CURRENT_CANDIDATE_RESULT exclusion requires mechanism/method-family-specific "
-                            "BRAIN CANDIDATE_RESULT evidence"
-                        )
-                elif basis == "SCOPE_BOUNDARY":
-                    if not any(
-                        str(row.get("kind", "")).upper() == "SCOPE_BOUNDARY"
-                        and str(row.get("subject", "")) in expected_subjects
-                        for row in evidence_rows
-                    ):
-                        raise ValueError(
-                            "SCOPE_BOUNDARY exclusion requires mechanism/method-family-specific "
-                            "SCOPE_BOUNDARY evidence"
-                        )
-                normalized_item["exclusion_basis"] = basis
-            assessments.append(normalized_item)
-
-        covered_method_families = sorted(
-            {str(item.get("method_family")) for item in assessments}
+        observations = _normalize_synthesis_observations(
+            raw.get("observation_refs", []),
+            state=state,
+            based_on_evidence_revision=based_on_evidence_revision,
         )
-        rows.append({
+        assessments, catalog_families, covered_families = _normalize_synthesis_assessments(
+            raw.get("mechanisms"),
+            label=f"blocker {name}",
+            entry=entry,
+            state=state,
+            based_on_evidence_revision=based_on_evidence_revision,
+            seen_assessment_ids=seen_assessment_ids,
+        )
+        blocker_rows.append({
             "name": name,
             "target": target,
             "owner": owner,
             "observation_refs": observations,
             "mechanisms": assessments,
-            "catalog_method_families": sorted(allowed_method_families),
-            "covered_method_families": covered_method_families,
+            "catalog_method_families": catalog_families,
+            "covered_method_families": covered_families,
         })
 
     if current_blockers:
@@ -871,54 +934,175 @@ def _normalize_synthesis(
         if missing:
             raise ValueError("synthesis missing current blockers: " + ", ".join(missing))
 
+    for raw in raw_enhancements:
+        if not isinstance(raw, dict) or not _nonempty(raw.get("target")) or not _nonempty(raw.get("owner")):
+            raise ValueError("each synthesis enhancement needs target/owner")
+        target = str(raw["target"]).strip()
+        owner = str(raw["owner"]).strip()
+        key = (target, owner)
+        if key in seen_enhancements:
+            raise ValueError(f"duplicate synthesis enhancement: {target}|{owner}")
+        seen_enhancements.add(key)
+        entry = _catalog_entry_for_enhancement(target, owner)
+        observations = _normalize_synthesis_observations(
+            raw.get("observation_refs", []),
+            state=state,
+            based_on_evidence_revision=based_on_evidence_revision,
+        )
+        assessments, catalog_families, covered_families = _normalize_synthesis_assessments(
+            raw.get("mechanisms"),
+            label=f"enhancement {target}|{owner}",
+            entry=entry,
+            state=state,
+            based_on_evidence_revision=based_on_evidence_revision,
+            seen_assessment_ids=seen_assessment_ids,
+        )
+        enhancement_rows.append({
+            "target": target,
+            "owner": owner,
+            "catalog_keys": entry.get("catalog_keys", []),
+            "observation_refs": observations,
+            "mechanisms": assessments,
+            "catalog_method_families": catalog_families,
+            "covered_method_families": covered_families,
+        })
+
     return {
         "catalog_version": _load_mechanism_catalog().get("version"),
         "incumbent_alpha_id": str((state.get("incumbent") or {}).get("alpha_id") or ""),
         "based_on_evidence_revision": based_on_evidence_revision,
-        "blockers": rows,
+        "blockers": blocker_rows,
+        "enhancements": enhancement_rows,
     }
 
 
 def _synthesis_assessment_map(synthesis: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
-    for blocker in synthesis.get("blockers", []):
-        for assessment in blocker.get("mechanisms", []):
-            row = dict(assessment)
-            row["blocker"] = blocker.get("name")
-            row["target"] = blocker.get("target")
-            row["owner"] = blocker.get("owner")
-            out[str(assessment.get("id"))] = row
+    for objective_type, rows in (
+        ("DEFECT", synthesis.get("blockers", [])),
+        ("ENHANCEMENT", synthesis.get("enhancements", [])),
+    ):
+        for objective in rows:
+            for assessment in objective.get("mechanisms", []):
+                row = dict(assessment)
+                row["objective_type"] = objective_type
+                row["blocker"] = objective.get("name")
+                row["target"] = objective.get("target")
+                row["owner"] = objective.get("owner")
+                out[str(assessment.get("id"))] = row
     return out
 
 
-def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any] | None:
+def _enhancement_objectives_for_incumbent_cycle(state: Dict[str, Any]) -> list[Dict[str, str]]:
+    incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
+    objectives: dict[tuple[str, str], Dict[str, str]] = {}
+    plans = [
+        *[item for item in state.get("optimization_plan_history", []) if isinstance(item, dict)],
+        state.get("optimization_plan"),
+    ]
+    for plan in plans:
+        if not isinstance(plan, dict):
+            continue
+        if incumbent_alpha_id and str(plan.get("incumbent_alpha_id") or "") != incumbent_alpha_id:
+            continue
+        for route in plan.get("routes", []):
+            if not isinstance(route, dict) or route.get("objective_type") != "ENHANCEMENT":
+                continue
+            target = str(route.get("target") or "")
+            owner = str(route.get("owner") or "")
+            if target and owner:
+                objectives[(target, owner)] = {"target": target, "owner": owner}
+    return [objectives[key] for key in sorted(objectives)]
+
+
+def _empty_plan_synthesis_rejection(
+    synthesis: Dict[str, Any],
+    *,
+    required_enhancements: list[Dict[str, str]] | None = None,
+) -> Dict[str, Any] | None:
     actionable = []
     diagnostic = []
-    uncovered = []
+    uncovered_blockers = []
+    uncovered_enhancements = []
 
     for blocker in synthesis.get("blockers", []):
-        catalog_families = set(blocker.get("catalog_method_families", []))
-        covered_families = set(blocker.get("covered_method_families", []))
-        missing_families = sorted(catalog_families - covered_families)
+        missing_families = sorted(
+            set(blocker.get("catalog_method_families", []))
+            - set(blocker.get("covered_method_families", []))
+        )
         if missing_families:
-            uncovered.append(
+            uncovered_blockers.append(
                 {
                     "blocker": blocker.get("name"),
                     "missing_method_families": missing_families,
                 }
             )
-
         for assessment in blocker.get("mechanisms", []):
-            status = assessment.get("status")
             row = {
                 "assessment_id": assessment.get("id"),
+                "objective_type": "DEFECT",
                 "blocker": blocker.get("name"),
                 "mechanism": assessment.get("mechanism"),
                 "method_family": assessment.get("method_family"),
             }
-            if status in SYNTHESIS_ACTIONABLE:
+            if assessment.get("status") in SYNTHESIS_ACTIONABLE:
                 actionable.append(row)
-            elif status == "NEEDS_DIAGNOSTIC":
+            elif assessment.get("status") == "NEEDS_DIAGNOSTIC":
+                diagnostic.append(row)
+
+    enhancement_map = {
+        (str(row.get("target") or ""), str(row.get("owner") or "")): row
+        for row in synthesis.get("enhancements", [])
+        if isinstance(row, dict)
+    }
+    required_keys = {
+        (str(row.get("target") or ""), str(row.get("owner") or ""))
+        for row in (required_enhancements or [])
+    }
+    for key in sorted(required_keys):
+        objective = enhancement_map.get(key)
+        if objective is None:
+            entry = _catalog_entry_for_enhancement(*key)
+            uncovered_enhancements.append(
+                {
+                    "target": key[0],
+                    "owner": key[1],
+                    "missing_method_families": sorted(
+                        {
+                            str(item.get("method_family"))
+                            for item in entry.get("mechanisms", [])
+                            if isinstance(item, dict) and item.get("method_family")
+                        }
+                    ),
+                }
+            )
+            continue
+        missing_families = sorted(
+            set(objective.get("catalog_method_families", []))
+            - set(objective.get("covered_method_families", []))
+        )
+        if missing_families:
+            uncovered_enhancements.append(
+                {
+                    "target": key[0],
+                    "owner": key[1],
+                    "missing_method_families": missing_families,
+                }
+            )
+
+    for objective in synthesis.get("enhancements", []):
+        for assessment in objective.get("mechanisms", []):
+            row = {
+                "assessment_id": assessment.get("id"),
+                "objective_type": "ENHANCEMENT",
+                "target": objective.get("target"),
+                "owner": objective.get("owner"),
+                "mechanism": assessment.get("mechanism"),
+                "method_family": assessment.get("method_family"),
+            }
+            if assessment.get("status") in SYNTHESIS_ACTIONABLE:
+                actionable.append(row)
+            elif assessment.get("status") == "NEEDS_DIAGNOSTIC":
                 diagnostic.append(row)
 
     if actionable:
@@ -933,14 +1117,14 @@ def _empty_plan_synthesis_rejection(synthesis: Dict[str, Any]) -> Dict[str, Any]
             "reason": "EMPTY_PLAN_DIAGNOSTIC_REQUIRED",
             "assessments": diagnostic,
         }
-    if uncovered:
+    if uncovered_blockers or uncovered_enhancements:
         return {
             "ok": False,
             "reason": "EMPTY_PLAN_METHOD_SPACE_UNASSESSED",
-            "blockers": uncovered,
+            "blockers": uncovered_blockers,
+            "enhancements": uncovered_enhancements,
         }
     return None
-
 
 def _active_plan_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     if state.get("planning_contract") not in {"v1", "v2"}:
