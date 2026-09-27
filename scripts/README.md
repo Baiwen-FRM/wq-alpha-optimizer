@@ -10,7 +10,7 @@ CLI：
 python3 scripts/optimizer_guard.py --help
 ```
 
-`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Chart payloads are reduced to compact deterministic snapshots and rendered inline in the Markdown log; no separate chart assets are written.
+`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Full incoming chart series are rendered immediately into one sibling `<run>_dashboard.svg`; the embedded Guard state keeps only compact chart projections for resume/audit efficiency. The Markdown references that one SVG. No Unicode sparkline is used as the primary visualization, and no `assets/` or per-chart SVG files are created.
 
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
