@@ -2864,6 +2864,12 @@ class StateStore:
             "preflight": pre,
             "status": "RESERVED",
             "route_id": hyp.get("route_id"),
+            # Freeze the numeric parent baseline used by this experiment. Later
+            # same-Incumbent Result refreshes must not retroactively change the
+            # deltas shown in post-candidate learning.
+            "parent_metrics": _copy_json(
+                ((state.get("incumbent") or {}).get("result_evidence") or {}).get("metrics", {})
+            ),
         }
         self._write(state)
         return {"allowed": True, "reason": None, "fingerprint": fp, "preflight": pre}
