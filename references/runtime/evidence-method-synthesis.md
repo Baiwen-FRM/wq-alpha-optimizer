@@ -28,7 +28,9 @@ python3 scripts/mechanism_synthesis.py \
   --root-alpha-id <ROOT_ALPHA_ID>
 ```
 
-The scaffold puts the current intake context and method space in one object: current Incumbent expression/settings/result evidence, fixed Dashboard field/visualization context, current blockers, any explicitly requested blocker-free enhancement objectives, canonical owners/method families from `mechanism-catalog.json`, and the evidence registry. Raw intake/recordsets are runtime inputs and are not represented as persistent artifact paths. The controller fills the assessments; the script does not guess economics.
+The scaffold puts the current intake context and method space in one object: current Incumbent expression/settings/result evidence, fixed Dashboard field/visualization context, current blockers, any explicitly requested **or already-entered** blocker-free enhancement objectives, canonical owners/method families from `mechanism-catalog.json`, the evidence registry, the current Incumbent cycle's conclusive candidate history, and enhancement progress. Raw intake/recordsets are runtime inputs and are not represented as persistent artifact paths. The controller fills the assessments; the script does not guess economics.
+
+`candidate_history` is deliberately factual rather than interpretive. For each evaluated candidate whose parent is the current Incumbent it exposes: hypothesis/route/mechanism, method family, Result status, before/after metrics, metric deltas, failed success/protection clauses, new blockers/unresolved checks, and expression/settings drift. `enhancement_progress` exposes catalog families already routed versus families never routed in the current cycle. These fields are the mandatory input for post-candidate learning; they prevent H1/H2/H3 from being treated as isolated anecdotes.
 
 ## Assessment states
 
@@ -55,6 +57,17 @@ For a current diagnostic exclusion, the evidence subject must identify the mecha
 
 Conflicting observations should normally produce a discriminator. Example: if Sharpe is uneven by capitalization **and** sector, do not immediately assume the cap effect is causal; ask whether the cap gradient survives a sector-conditioned comparison.
 
+## Cross-candidate learning
+
+After every conclusive `SUPPORTED` or `REFUTED` candidate, rebuild the scaffold before choosing the next route. The next assessment must use the **joint constraints** implied by the current cycle's candidate history, not only the most recent Result.
+
+Examples of valid learning behavior:
+
+- one candidate reduces Turnover but destroys Sharpe/Returns, while another increases Sharpe/Returns but breaches a Turnover ceiling → the next question should preserve the fast edge while discriminating low-value position changes, rather than continue a one-dimensional “faster/slower” sweep;
+- two different neutralization/grouping interventions fail in the same exposure-sensitive subset → ask whether the underlying field/coverage mechanism is wrong before trying a third cosmetic grouping change.
+
+The scaffold does not invent these economic conclusions. It gives the controller the factual deltas and route history required to reason about them. “I cannot immediately think of a payload” is not evidence. If a catalog family has no valid exclusion basis, classify it as `PLAUSIBLE_PROBE` or `NEEDS_DIAGNOSTIC` when an in-scope discriminator remains possible; do not silently convert it into exhaustion.
+
 ## From assessments to routes
 
 A route must reference one or more `assessment_refs` whose status is `ACTIONABLE` or `PLAUSIBLE_PROBE`. The route target/owner/mechanism must match the assessment, and the route must carry the evidence used by that assessment.
@@ -67,7 +80,7 @@ The synthesis chooses a **method family / mechanism question**, not an operator.
 
 Normal plans are intentionally lightweight: if a justified route exists, the controller does **not** need to enumerate every method family before testing it.
 
-An empty plan is different. To claim “no justified route” for a blocker, the synthesis must cover the entire current method-family catalog for that blocker. For a blocker-free enhancement cycle, final empty re-plan must likewise cover the entire catalog method space of every enhancement target/owner entered during the current Incumbent cycle. Every required family must be assessed and there may be no `ACTIONABLE`, `PLAUSIBLE_PROBE`, or `NEEDS_DIAGNOSTIC` assessment.
+An empty plan is different. To claim “no justified route” for a blocker, the synthesis must cover the entire current method-family catalog for that blocker. For a blocker-free enhancement cycle, **every later empty plan for the same Incumbent** must cover the entire catalog method space of every enhancement target/owner entered during that cycle. This includes the normal final re-plan and any later STALE re-profile caused by a fresh Result/check refresh. Every required family must be assessed and there may be no `ACTIONABLE`, `PLAUSIBLE_PROBE`, or `NEEDS_DIAGNOSTIC` assessment.
 
 Therefore:
 
