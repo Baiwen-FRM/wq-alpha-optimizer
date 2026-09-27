@@ -871,6 +871,7 @@ class EvidenceMethodSynthesisAdversarialTests(TestCase):
         self.assertEqual(learned["hypothesis_id"], "H_TURN")
         self.assertEqual(learned["status"], "REFUTED")
         self.assertEqual(learned["method_families"], ["stable_vs_noisy_component"])
+        self.assertEqual(learned["metrics_before_source"], "reserved_parent_metrics")
         self.assertAlmostEqual(learned["metric_deltas"]["SHARPE"], -1.86)
         self.assertAlmostEqual(learned["metric_deltas"]["TURNOVER"], -0.0554)
         progress = scaffold["enhancement_progress"][0]
