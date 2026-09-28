@@ -506,7 +506,7 @@ class CoreGuardTests(TestCase):
         self.assertEqual(field_rows["field_b"]["dataset"], "pv1")
         self.assertEqual(field_rows["field_b"]["coverage"], 0.98)
         log_text = Path(state["run"]["log_path"]).read_text(encoding="utf-8")
-        self.assertIn("| field_b | MATRIX | pv1 | 0.98 | 1.0 | Verified test field B |", log_text)
+        self.assertIn("| field_b | MATRIX | pv1 | 0.98 | 1 | Verified test field B |", log_text)
         self.assertNotIn("| field_b | unknown | unknown |", log_text)
 
     def test_machine_decision_trail_renders_hypothesis_candidate_result_and_learning(self):
