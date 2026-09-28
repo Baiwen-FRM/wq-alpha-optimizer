@@ -686,6 +686,177 @@ def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
     return _result_snapshot_readiness(incumbent.get("result_evidence") or {})
 
 
+def _root_metric_deltas(state: Dict[str, Any], metrics: Dict[str, Any]) -> Dict[str, float]:
+    root_metrics = _normalize_metrics(
+        ((state.get("root_baseline") or {}).get("result_evidence") or {}).get("metrics")
+    )
+    current_metrics = _normalize_metrics(metrics)
+    return {
+        name: current_metrics[name] - root_metrics[name]
+        for name in sorted(set(root_metrics) & set(current_metrics))
+    }
+
+
+def _root_protection_from_policies(
+    policies: list[Dict[str, Any]],
+    root_result: Dict[str, Any],
+    candidate_result: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    root_metrics = _normalize_metrics((root_result or {}).get("metrics"))
+    candidate_metrics = _normalize_metrics((candidate_result or {}).get("metrics"))
+    rows = []
+    for policy in policies:
+        name = str(policy.get("name") or "").upper()
+        if name not in root_metrics or name not in candidate_metrics:
+            rows.append(
+                {
+                    "policy": policy,
+                    "root": root_metrics.get(name),
+                    "after": candidate_metrics.get(name),
+                    "passed": False,
+                    "reason": "ROOT_PROTECTED_METRIC_MISSING",
+                }
+            )
+            continue
+        tolerance = float(policy.get("tolerance", 0.0))
+        root_value = root_metrics[name]
+        after_value = candidate_metrics[name]
+        passed = (
+            after_value >= root_value - tolerance
+            if policy.get("rule") == "not_lower"
+            else after_value <= root_value + tolerance
+        )
+        rows.append(
+            {
+                "policy": policy,
+                "root": root_value,
+                "after": after_value,
+                "passed": passed,
+            }
+        )
+    return rows
+
+
+def _archive_submission_candidate(
+    state: Dict[str, Any],
+    candidate: Dict[str, Any],
+    hypothesis: Dict[str, Any],
+    fingerprint: str,
+    result_snapshot: Dict[str, Any],
+    evaluation: Dict[str, Any],
+    evidence_ref: str,
+) -> Dict[str, Any]:
+    readiness = _result_snapshot_readiness(result_snapshot)
+    policies = list((hypothesis.get("contract") or {}).get("protected_metrics") or [])
+    root_protected = list(evaluation.get("root_protected_results") or [])
+    if policies and not root_protected:
+        root_protected = _root_protection_from_policies(
+            policies,
+            (state.get("root_baseline") or {}).get("result_evidence") or {},
+            result_snapshot,
+        )
+    root_protection_passed = all(bool(row.get("passed")) for row in root_protected)
+    if not policies:
+        root_protection_passed = True
+
+    entry = {
+        "alpha_id": str(result_snapshot.get("alpha_id") or ""),
+        "fingerprint": fingerprint,
+        "hypothesis_id": str(candidate.get("hypothesis_id") or ""),
+        "hypothesis_status": str(evaluation.get("status") or ""),
+        "parent_id": str(candidate.get("parent_id") or ""),
+        "route_id": (state.get("candidates") or {}).get(fingerprint, {}).get("route_id"),
+        "result_evidence_ref": evidence_ref,
+        "observed_at": result_snapshot.get("observed_at"),
+        "source": result_snapshot.get("source"),
+        "expression": str(candidate.get("expression") or ""),
+        "fields": list(candidate.get("fields") or []),
+        "settings": _copy_json(candidate.get("settings") or {}),
+        "language": str(candidate.get("language") or "").upper(),
+        "metrics": _copy_json(result_snapshot.get("metrics") or {}),
+        "result_evidence": _copy_json(result_snapshot),
+        "readiness": readiness,
+        "protected_policies": _copy_json(policies),
+        "root_protected_results": _copy_json(root_protected),
+        "root_protection_passed": root_protection_passed,
+        "root_metric_deltas": _root_metric_deltas(state, result_snapshot.get("metrics") or {}),
+        "final_selection_eligible": bool(readiness.get("ready") and root_protection_passed),
+    }
+    alpha_id = entry["alpha_id"]
+    if alpha_id:
+        state.setdefault("submission_candidate_archive", {})[alpha_id] = entry
+        # New ready evidence invalidates a prior final comparison. The controller
+        # must compare the enlarged archive again before terminal selection.
+        if readiness.get("ready"):
+            state["submission_candidate_selection"] = None
+    return entry
+
+
+def _refresh_archived_submission_candidate(
+    state: Dict[str, Any],
+    alpha_id: str,
+    result_snapshot: Dict[str, Any],
+) -> None:
+    archive = state.setdefault("submission_candidate_archive", {})
+    entry = archive.get(str(alpha_id))
+    if not isinstance(entry, dict):
+        return
+    policies = list(entry.get("protected_policies") or [])
+    root_protected = _root_protection_from_policies(
+        policies,
+        (state.get("root_baseline") or {}).get("result_evidence") or {},
+        result_snapshot,
+    )
+    root_protection_passed = all(bool(row.get("passed")) for row in root_protected) if policies else True
+    readiness = _result_snapshot_readiness(result_snapshot)
+    entry["observed_at"] = result_snapshot.get("observed_at")
+    entry["source"] = result_snapshot.get("source")
+    entry["metrics"] = _copy_json(result_snapshot.get("metrics") or {})
+    entry["result_evidence"] = _copy_json(result_snapshot)
+    entry["readiness"] = readiness
+    entry["root_protected_results"] = root_protected
+    entry["root_protection_passed"] = root_protection_passed
+    entry["root_metric_deltas"] = _root_metric_deltas(state, result_snapshot.get("metrics") or {})
+    entry["final_selection_eligible"] = bool(readiness.get("ready") and root_protection_passed)
+    archive[str(alpha_id)] = entry
+    selection = state.get("submission_candidate_selection")
+    if isinstance(selection, dict) and str(selection.get("alpha_id")) == str(alpha_id):
+        state["submission_candidate_selection"] = None
+
+
+def _submission_candidate_comparison(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    rows = []
+    for alpha_id, entry in sorted((state.get("submission_candidate_archive") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        readiness = entry.get("readiness") if isinstance(entry.get("readiness"), dict) else {}
+        if not readiness.get("ready"):
+            continue
+        rows.append(
+            {
+                "alpha_id": str(alpha_id),
+                "hypothesis_id": entry.get("hypothesis_id"),
+                "hypothesis_status": entry.get("hypothesis_status"),
+                "parent_id": entry.get("parent_id"),
+                "metrics": _copy_json(entry.get("metrics") or {}),
+                "root_metric_deltas": _copy_json(entry.get("root_metric_deltas") or {}),
+                "root_protection_passed": bool(entry.get("root_protection_passed")),
+                "final_selection_eligible": bool(entry.get("final_selection_eligible")),
+                "root_protected_results": _copy_json(entry.get("root_protected_results") or []),
+                "observed_at": entry.get("observed_at"),
+            }
+        )
+    return rows
+
+
+def _eligible_submission_candidate_ids(state: Dict[str, Any]) -> list[str]:
+    return [
+        str(row["alpha_id"])
+        for row in _submission_candidate_comparison(state)
+        if row.get("final_selection_eligible")
+    ]
+
+
 def _load_mechanism_catalog() -> Dict[str, Any]:
     try:
         raw = json.loads(MECHANISM_CATALOG_PATH.read_text(encoding="utf-8"))
