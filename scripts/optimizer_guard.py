@@ -564,6 +564,41 @@ def _snapshot_from_json(baseline: Dict[str, Any], root_alpha_id: str) -> Dict[st
     }
 
 
+FIELD_METADATA_KEYS = ("name", "type", "dataset", "coverage", "dateCoverage", "description")
+
+
+def _normalize_field_metadata(metadata: Dict[str, Any], expected_name: str) -> Dict[str, Any]:
+    if not isinstance(metadata, dict):
+        raise ValueError("FIELD_SCOPE evidence requires field_metadata object")
+    missing = [key for key in FIELD_METADATA_KEYS if key not in metadata]
+    if missing:
+        raise ValueError("field_metadata missing: " + ", ".join(missing))
+    name = str(metadata.get("name") or "").strip()
+    if not name or name != str(expected_name):
+        raise ValueError("field_metadata.name must match FIELD_SCOPE subject")
+    out = {key: _copy_json(metadata.get(key)) for key in FIELD_METADATA_KEYS}
+    if "visualizable" in metadata:
+        out["visualizable"] = _copy_json(metadata.get("visualizable"))
+    return out
+
+
+def _merge_dashboard_field_metadata(state: Dict[str, Any], metadata: Dict[str, Any]) -> None:
+    context = state.setdefault("dashboard_context", {"fields": [], "visualization": {}})
+    rows = context.setdefault("fields", [])
+    if not isinstance(rows, list):
+        rows = []
+        context["fields"] = rows
+    name = str(metadata.get("name") or "")
+    replacement = _copy_json(metadata)
+    for index, row in enumerate(rows):
+        if isinstance(row, dict) and str(row.get("name") or "") == name:
+            merged = dict(row)
+            merged.update(replacement)
+            rows[index] = merged
+            return
+    rows.append(replacement)
+
+
 def _validate_evidence_record(record: Dict[str, Any]) -> Dict[str, Any]:
     required = ("id", "kind", "subject", "source", "observed_at", "claim")
     missing = [k for k in required if not _nonempty(record.get(k))]
@@ -576,7 +611,7 @@ def _validate_evidence_record(record: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("evidence source must be an auditable namespace/action, e.g. BRAIN:get_data_fields")
     if len(claim.strip()) < 12:
         raise ValueError("evidence claim is too short to audit")
-    return {
+    normalized = {
         "id": str(record["id"]),
         "kind": str(record["kind"]).upper(),
         "subject": str(record["subject"]),
@@ -584,6 +619,14 @@ def _validate_evidence_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "observed_at": str(record["observed_at"]),
         "claim": claim,
     }
+    if normalized["kind"] == "FIELD_SCOPE":
+        normalized["field_metadata"] = _normalize_field_metadata(
+            record.get("field_metadata"),
+            normalized["subject"],
+        )
+    elif "field_metadata" in record:
+        raise ValueError("field_metadata is only valid for FIELD_SCOPE evidence")
+    return normalized
 
 
 def _evidence_fingerprint(record: Dict[str, Any]) -> str:
@@ -2871,11 +2914,21 @@ class StateStore:
             return {"ok": False, "reason": "ALLOW_FIELD_EVIDENCE_REQUIRED"}
         if ev.get("kind") != "FIELD_SCOPE" or ev.get("subject") != field:
             return {"ok": False, "reason": "FIELD_SCOPE_EVIDENCE_MISMATCH", "evidence": ev}
+        metadata = ev.get("field_metadata")
+        if not isinstance(metadata, dict):
+            return {"ok": False, "reason": "FIELD_SCOPE_METADATA_REQUIRED", "evidence_ref": evidence_ref}
         if field not in state["allowed_fields"]:
             state["allowed_fields"].append(field); state["allowed_fields"].sort()
         state["allowed_field_evidence"][field] = evidence_ref
+        _merge_dashboard_field_metadata(state, metadata)
         self._write(state)
-        return {"ok": True, "field": field, "evidence_ref": evidence_ref, "allowed_fields": state["allowed_fields"]}
+        return {
+            "ok": True,
+            "field": field,
+            "evidence_ref": evidence_ref,
+            "field_metadata": metadata,
+            "allowed_fields": state["allowed_fields"],
+        }
 
     def reserve_simulation(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
         state = self.read()
