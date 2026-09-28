@@ -20,7 +20,7 @@ are terminal. A repeated final re-plan for the same Incumbent is allowed only wh
 `withdraw-hypothesis` is the narrow pre-reservation correction path: it only works while an OPEN hypothesis has no candidate fingerprint and no candidate/simulation record. Use it when deterministic preflight finds a contract omission before reserve/POST. It records the old hypothesis as WITHDRAWN and requires a new hypothesis ID. It is deliberately blocked after reserve, including after RELEASED.
 
 `finish-run --status COMPLETED_WITH_EXHAUSTION` requires the final re-plan
-gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the current
+gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the selected Root-protected submission candidate
 Incumbent check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
 `PLATFORM_UNRECOVERABLE` are explicit terminal freeze states.
 
