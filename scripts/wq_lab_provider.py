@@ -379,6 +379,25 @@ def _discover_recordsets(session, wq, alpha_id: str, attempts: int, sleep_second
     return best_listing, best_names
 
 
+def _fetch_recordset_with_retry(
+    session,
+    wq,
+    alpha_id: str,
+    name: str,
+    *,
+    attempts: int,
+    sleep_seconds: float,
+) -> dict | None:
+    budget = max(1, attempts)
+    for attempt in range(budget):
+        data = wq.get_alpha_recordset(session, alpha_id, name)
+        if isinstance(data, dict) and data:
+            return data
+        if attempt + 1 < budget and sleep_seconds > 0:
+            time.sleep(sleep_seconds)
+    return None
+
+
 def visualization_snapshot(
     session,
     wq,
@@ -432,8 +451,16 @@ def visualization_snapshot(
         listing, names = root_listing, root_names
 
     recordsets: dict[str, dict] = {}
+    recordset_fetch_attempts = min(2, max(1, discovery_attempts))
     for name in names:
-        data = wq.get_alpha_recordset(session, diagnostic_alpha_id, name)
+        data = _fetch_recordset_with_retry(
+            session,
+            wq,
+            diagnostic_alpha_id,
+            name,
+            attempts=recordset_fetch_attempts,
+            sleep_seconds=discovery_sleep_seconds,
+        )
         if isinstance(data, dict) and data:
             recordsets[name] = data
 
