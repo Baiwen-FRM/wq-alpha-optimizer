@@ -3563,6 +3563,72 @@ class StateStore:
         self._write(state)
         return {"promoted": True, "previous_incumbent": previous, "incumbent_alpha_id": snapshot["alpha_id"], "complexity_delta_vs_root": pre.get("complexity_delta_vs_root")}
 
+    def select_submission_candidate(self, alpha_id: str, reason: str) -> Dict[str, Any]:
+        if not str(alpha_id).strip() or not str(reason).strip():
+            return {"ok": False, "reason": "SUBMISSION_SELECTION_CONTRACT"}
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+
+        open_hypotheses = [
+            key for key, item in state.get("hypotheses", {}).items()
+            if item.get("status") == "OPEN"
+        ]
+        if open_hypotheses:
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_SELECTION_REQUIRES_NO_OPEN_HYPOTHESIS",
+                "hypotheses": open_hypotheses,
+            }
+        if (state.get("focus") or {}).get("status") == "OPEN":
+            return {"ok": False, "reason": "SUBMISSION_SELECTION_REQUIRES_CLOSED_FOCUS"}
+        plan = state.get("optimization_plan")
+        if plan and plan.get("status") in {"ACTIVE", "STALE"}:
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_SELECTION_REQUIRES_SETTLED_PLAN",
+                "plan_status": plan.get("status"),
+            }
+
+        archive = state.get("submission_candidate_archive") or {}
+        entry = archive.get(str(alpha_id))
+        if not isinstance(entry, dict):
+            return {
+                "ok": False,
+                "reason": "UNKNOWN_SUBMISSION_CANDIDATE",
+                "alpha_id": str(alpha_id),
+                "comparison": _submission_candidate_comparison(state),
+            }
+        if not entry.get("final_selection_eligible"):
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_CANDIDATE_NOT_ELIGIBLE",
+                "alpha_id": str(alpha_id),
+                "entry": entry,
+                "comparison": _submission_candidate_comparison(state),
+            }
+
+        comparison = _submission_candidate_comparison(state)
+        state["submission_candidate_selection"] = {
+            "alpha_id": str(alpha_id),
+            "reason": str(reason).strip(),
+            "selected_at": _now_iso(),
+            "compared_candidate_ids": [
+                str(row["alpha_id"])
+                for row in comparison
+                if row.get("final_selection_eligible")
+            ],
+            "root_relative_comparison": comparison,
+        }
+        self._write(state)
+        return {
+            "ok": True,
+            "alpha_id": str(alpha_id),
+            "selection": state["submission_candidate_selection"],
+        }
+
+
     def set_run_phase_status(self, status: str, detail: str | None = None) -> Dict[str, Any]:
         """Update only the nonterminal run phase marker used by bootstrap recovery."""
         status = str(status).upper()
@@ -3630,9 +3696,6 @@ class StateStore:
                         "routes": route_violations,
                     }
             elif status == "SUBMISSION_READY":
-                readiness = _submission_readiness(state)
-                if not readiness.get("ready"):
-                    return {"ok": False, "reason": readiness.get("reason"), "readiness": readiness}
                 if plan:
                     if plan.get("status") == "STALE":
                         return {"ok": False, "reason": "PLAN_STALE_REPLAN_REQUIRED"}
@@ -3647,6 +3710,9 @@ class StateStore:
                             "last_final_replan_evidence_revision": _last_final_replan_evidence_revision(plan),
                             "current_evidence_revision": int(state.get("evidence_revision", 0)),
                         }
+
+                eligible = _eligible_submission_candidate_ids(state)
+                if not eligible:
                     root_alpha_id = str((state.get("root_baseline") or {}).get("alpha_id") or "")
                     incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
                     if root_alpha_id and incumbent_alpha_id == root_alpha_id:
@@ -3655,6 +3721,53 @@ class StateStore:
                             "reason": "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
                             "incumbent_alpha_id": incumbent_alpha_id,
                         }
+                    return {
+                        "ok": False,
+                        "reason": "NO_ELIGIBLE_SUBMISSION_CANDIDATE",
+                        "comparison": _submission_candidate_comparison(state),
+                    }
+
+                selection = state.get("submission_candidate_selection")
+                if not isinstance(selection, dict):
+                    if len(eligible) == 1:
+                        selected_id = eligible[0]
+                        selection = {
+                            "alpha_id": selected_id,
+                            "reason": "Only Root-protected submission-ready candidate.",
+                            "selected_at": _now_iso(),
+                            "compared_candidate_ids": list(eligible),
+                            "root_relative_comparison": _submission_candidate_comparison(state),
+                        }
+                        state["submission_candidate_selection"] = selection
+                    else:
+                        return {
+                            "ok": False,
+                            "reason": "SUBMISSION_CANDIDATE_SELECTION_REQUIRED",
+                            "eligible_candidate_ids": eligible,
+                            "comparison": _submission_candidate_comparison(state),
+                        }
+
+                selected_id = str(selection.get("alpha_id") or "")
+                if selected_id not in eligible:
+                    return {
+                        "ok": False,
+                        "reason": "SELECTED_SUBMISSION_CANDIDATE_NOT_ELIGIBLE",
+                        "selected_alpha_id": selected_id,
+                        "eligible_candidate_ids": eligible,
+                        "comparison": _submission_candidate_comparison(state),
+                    }
+                selected_entry = (state.get("submission_candidate_archive") or {}).get(selected_id) or {}
+                selected_readiness = _result_snapshot_readiness(
+                    selected_entry.get("result_evidence") or {}
+                )
+                if not selected_readiness.get("ready"):
+                    return {
+                        "ok": False,
+                        "reason": selected_readiness.get("reason"),
+                        "readiness": selected_readiness,
+                        "selected_alpha_id": selected_id,
+                    }
+                run["submission_candidate_alpha_id"] = selected_id
             elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
                 return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
@@ -3662,7 +3775,12 @@ class StateStore:
         run["end_reason"] = reason.strip()
         state["run"] = run
         self._write(state)
-        return {"ok": True, "status": status, "run": run}
+        return {
+            "ok": True,
+            "status": status,
+            "run": run,
+            "submission_candidate_selection": state.get("submission_candidate_selection"),
+        }
 
     def summary(self) -> Dict[str, Any]:
         state = self.read()
@@ -3686,6 +3804,8 @@ class StateStore:
             "hypotheses": {k: v.get("status") for k, v in state.get("hypotheses", {}).items()},
             "simulation_states": {k: v.get("status") for k, v in state.get("simulations", {}).items()},
             "submission_readiness": _submission_readiness(state),
+            "submission_candidate_archive": _submission_candidate_comparison(state),
+            "submission_candidate_selection": state.get("submission_candidate_selection"),
             "dashboard_context": state.get("dashboard_context", {}),
         }
 
@@ -3793,6 +3913,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("set-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--type", required=True); p.add_argument("--owner", required=True); p.add_argument("--target", required=True); p.add_argument("--blocker"); p.add_argument("--route-id"); p.add_argument("--evidence-ref", action="append", required=True)
     p = sub.add_parser("exhaust-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--evidence-ref")
     p = sub.add_parser("finish-run"); p.add_argument("--status", required=True, choices=sorted(RUN_TERMINAL_STATUSES)); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("select-submission-candidate"); p.add_argument("--alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("open-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--id", required=True); p.add_argument("--contract", required=True)
     p = sub.add_parser("withdraw-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("abandon-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
@@ -3823,6 +3944,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "set-focus": out = StateStore(args.state, args.root_alpha_id).set_focus(args.type, args.owner, args.target, args.evidence_ref, args.blocker, args.route_id)
         elif args.cmd == "exhaust-focus": out = StateStore(args.state, args.root_alpha_id).exhaust_focus(args.reason, args.evidence_ref)
         elif args.cmd == "finish-run": out = StateStore(args.state, args.root_alpha_id).finish_run(args.status, args.reason)
+        elif args.cmd == "select-submission-candidate": out = StateStore(args.state, args.root_alpha_id).select_submission_candidate(args.alpha_id, args.reason)
         elif args.cmd == "open-hypothesis": out = StateStore(args.state, args.root_alpha_id).open_hypothesis(args.id, _load_json_arg(args.contract))
         elif args.cmd == "withdraw-hypothesis": out = StateStore(args.state, args.root_alpha_id).withdraw_hypothesis(args.hypothesis_id, args.reason)
         elif args.cmd == "abandon-hypothesis": out = StateStore(args.state, args.root_alpha_id).abandon_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
