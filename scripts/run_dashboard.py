@@ -178,16 +178,16 @@ def _render_machine_decision_trail(state: Dict[str, Any]) -> str:
         out += f"- **Parent Incumbent:** {_cell(spec.get('parent_id'))}\n"
         out += f"- **Route:** {_cell(hyp.get('route_id'))}; target={_cell(contract.get('target'))}\n"
         out += f"- **Frozen hypothesis:** {_cell(contract.get('principal_hypothesis'))}\n"
-        out += f"- **Mutation:** \`{_cell(_compact_json(contract.get('mutation') or {}))}\`\n"
-        out += f"- **Success criteria:** \`{_cell(_compact_json(contract.get('success_criteria') or []))}\`\n"
-        out += f"- **Protected metrics:** \`{_cell(_compact_json(contract.get('protected_metrics') or []))}\`\n"
+        out += f"- **Mutation:** `{_cell(_compact_json(contract.get('mutation') or {}))}`\n"
+        out += f"- **Success criteria:** `{_cell(_compact_json(contract.get('success_criteria') or []))}`\n"
+        out += f"- **Protected metrics:** `{_cell(_compact_json(contract.get('protected_metrics') or []))}`\n"
         out += f"- **Failure meaning:** {_cell(contract.get('failure_meaning'))}\n"
         refs = contract.get("evidence_refs") or []
         if refs:
             out += f"- **Evidence refs:** {_cell(', '.join(str(ref) for ref in refs))}\n"
 
         if fingerprint:
-            out += f"- **Candidate fingerprint:** \`{_cell(fingerprint)}\`\n"
+            out += f"- **Candidate fingerprint:** `{_cell(fingerprint)}`\n"
         if spec:
             out += f"- **Candidate fields:** {_cell(', '.join(str(x) for x in (spec.get('fields') or [])))}\n"
             expression = str(spec.get("expression") or "").strip()
