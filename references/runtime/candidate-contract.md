@@ -158,7 +158,7 @@ ACTIVE route 的正常 terminal transition 需要满足至少一个条件：
 
 `run.status` 进入 `SUCCESS`、`SUBMISSION_READY`、`COMPLETED_WITH_EXHAUSTION`、`USER_STOP`、`SCOPE_BOUNDARY` 或 `PLATFORM_UNRECOVERABLE` 后是 terminal boundary；所有 research-state mutation 都拒绝并返回 `RUN_ALREADY_TERMINAL`。`append_log` 只追加最终人工说明，不改变研究状态，因此仍可使用。
 
-其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求当前 Incumbent snapshot 的 authenticated/complete/auditable checks 无 blocking/unresolved 项，并且不能存在 ACTIVE/STALE research plan；若完成 final re-plan 后 Incumbent 仍是 Root，Guard 要求使用 `COMPLETED_WITH_EXHAUSTION` 表达“未找到更优 Incumbent”.
+其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求 selected submission candidate 的 archived snapshot 为 authenticated/complete/auditable、无 blocking/unresolved 项、Root protection 通过，并且不能存在 ACTIVE/STALE research plan。若有多个 eligible ready candidates，必须先完成 archive comparison + selection；若优化 cycle 已完成且没有 eligible evaluated candidate、Incumbent 仍是 Root，Guard 要求使用 `COMPLETED_WITH_EXHAUSTION` 表达“未找到更优 Incumbent”.
 
 ## 4. Focus
 
@@ -298,7 +298,7 @@ Guard 必须验证：
 - success criteria 与 protected metrics 是否成立；
 - candidate 是否引入**新的** blocking check 或 unresolved check。`FAIL` 永远 blocking。WARNING policy 在 Incumbent 上只决定一次；candidate/refresh 对同名 WARNING 由 Guard 自动继承该 `policy_classified/policy_blocking`，真正新出现的 WARNING 仍 unresolved。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved。正常 executor 对“相对 Incumbent 新出现的 PENDING/UNKNOWN/RUNNING/PROCESSING”做有界等待，但在等待前先做纯机制 preview：只要任何已观察 success criterion / protected metric 明确失败，或出现新 blocker，conjunctive hypothesis 已经足以 `REFUTED`，无关的 correlation PENDING/缺行不能把这个负结论覆盖成 `INCONCLUSIVE`。只有 candidate 仍可能 `SUPPORTED` 时，未解决 safety/check observations 才必须继续等待/进入 reconciliation boundary。
 
-`SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
+单个 candidate 的 submission readiness 仍然严格：其 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。Research evaluation 与 archive readiness 共用该 candidate 的同一份真实 snapshot；终局 `SUBMISSION_READY` 再要求从 ready archive 中选择 Root-protected eligible candidate。
 
 只有 guard 计算为 `SUPPORTED` 的 result 才能 promotion。`REFUTED / INCONCLUSIVE` 不能靠调用者改布尔值绕过。
 
