@@ -247,7 +247,13 @@ def _evaluate_done_alpha(
         incumbent_result,
         evidence,
     )
-    preview = guard.preview_candidate_result(contract, incumbent_result, evidence)
+    root_result = (state.get("root_baseline") or {}).get("result_evidence", {})
+    preview = guard.preview_candidate_result(
+        contract,
+        incumbent_result,
+        evidence,
+        root_result,
+    )
     # Pending safety/check observations matter only while the hypothesis could
     # still be supported. A decisive metric/protection failure is already valid
     # negative mechanism evidence and must be recorded as REFUTED now.
