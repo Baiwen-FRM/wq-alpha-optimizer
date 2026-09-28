@@ -81,17 +81,22 @@ def _render_checks(snapshot: Dict[str, Any]) -> str:
 
 def _render_fields(context: Dict[str, Any], fallback: list[str]) -> str:
     raw = context.get("fields") if isinstance(context, dict) else []
-    rows = []
+    registry: Dict[str, Dict[str, Any]] = {}
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, str) and item.strip():
-                rows.append({"name": item.strip()})
+                registry[item.strip()] = {"name": item.strip()}
             elif isinstance(item, dict) and item.get("name"):
-                rows.append(item)
-    known = {str(x.get("name")) for x in rows}
+                registry[str(item["name"])] = item
+
+    # Dashboard Field Information describes the fields actually used by the
+    # current Incumbent. The context is a metadata registry and may contain
+    # pre-authorized fields that are not yet in the expression.
+    rows = []
     for name in fallback:
-        if str(name) not in known:
-            rows.append({"name": name})
+        rows.append(registry.get(str(name), {"name": str(name)}))
+    if not rows and registry:
+        rows = list(registry.values())
     if not rows:
         return "_Field information unavailable._\n"
     out = "| Field | Type | Dataset | Coverage | Date coverage | Description |\n|---|---|---|---:|---:|---|\n"
@@ -374,7 +379,17 @@ def enrich_context_with_charts(state: Dict[str, Any], payload: Dict[str, Any]) -
                 normalized.append(json.loads(json.dumps(row)))
             else:
                 raise ValueError("invalid field row")
-        context["fields"] = normalized
+        existing = {
+            str(row.get("name")): row
+            for row in (context.get("fields") or [])
+            if isinstance(row, dict) and row.get("name")
+        }
+        for row in normalized:
+            name = str(row["name"])
+            merged = dict(existing.get(name, {}))
+            merged.update(row)
+            existing[name] = merged
+        context["fields"] = list(existing.values())
 
     if "visualization" in payload:
         vis = payload.get("visualization")
