@@ -2327,6 +2327,11 @@ class StateStore:
             if _result_fact_fingerprint(previous) == _result_fact_fingerprint(snapshot):
                 incumbent["result_evidence"] = snapshot
                 state["incumbent"] = incumbent
+                _refresh_archived_submission_candidate(
+                    state,
+                    str(incumbent.get("alpha_id") or ""),
+                    snapshot,
+                )
                 self._write(state)
                 return {
                     "ok": True,
@@ -2341,6 +2346,11 @@ class StateStore:
         facts_changed = _result_fact_fingerprint(previous) != _result_fact_fingerprint(snapshot)
         incumbent["result_evidence"] = snapshot
         state["incumbent"] = incumbent
+        _refresh_archived_submission_candidate(
+            state,
+            str(incumbent.get("alpha_id") or ""),
+            snapshot,
+        )
         plan = state.get("optimization_plan")
         if facts_changed and plan and plan.get("status") in {"ACTIVE", "EXHAUSTED"}:
             plan["status"] = "STALE"
@@ -3475,6 +3485,15 @@ class StateStore:
         state["candidates"][fp]["result_evaluation"] = evaluation
         state["candidates"][fp]["result_alpha_id"] = str(result_evidence["alpha_id"])
         state["candidates"][fp]["result_evidence_ref"] = result_evidence_id
+        archived_candidate = _archive_submission_candidate(
+            state,
+            candidate,
+            hyp,
+            fp,
+            result_snapshot,
+            evaluation,
+            result_evidence_id,
+        )
         route_id = state["candidates"][fp].get("route_id") or hyp.get("route_id")
         plan = state.get("optimization_plan")
         if route_id and isinstance(plan, dict):
@@ -3490,6 +3509,7 @@ class StateStore:
             "status": evaluation["status"],
             "evaluation": evaluation,
             "evidence_ref": result_evidence_id,
+            "submission_candidate": archived_candidate if archived_candidate.get("readiness", {}).get("ready") else None,
         }
 
     def promote(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
