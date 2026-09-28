@@ -644,11 +644,10 @@ def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
-def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
-    incumbent = state.get("incumbent") or {}
-    if not incumbent:
+def _result_snapshot_readiness(snapshot: Dict[str, Any] | None) -> Dict[str, Any]:
+    evidence = snapshot or {}
+    if not evidence:
         return {"ready": False, "reason": "STATE_NOT_INITIALIZED", "blockers": [], "unresolved_checks": []}
-    evidence = incumbent.get("result_evidence") or {}
     if not evidence.get("response_complete") or not evidence.get("authenticated"):
         return {"ready": False, "reason": "READINESS_EVIDENCE_INCOMPLETE", "blockers": [], "unresolved_checks": []}
     source = evidence.get("source")
@@ -678,6 +677,13 @@ def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
         "observed_at": observed_at,
         "source": source,
     }
+
+
+def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
+    incumbent = state.get("incumbent") or {}
+    if not incumbent:
+        return {"ready": False, "reason": "STATE_NOT_INITIALIZED", "blockers": [], "unresolved_checks": []}
+    return _result_snapshot_readiness(incumbent.get("result_evidence") or {})
 
 
 def _load_mechanism_catalog() -> Dict[str, Any]:
@@ -1821,6 +1827,8 @@ class StateStore:
             "hypotheses": {},
             "candidates": {},
             "simulations": {},
+            "submission_candidate_archive": {},
+            "submission_candidate_selection": None,
             "run": None,
             "dashboard_context": {"fields": [], "visualization": {}},
             "log_entries": [],
@@ -1841,6 +1849,8 @@ class StateStore:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v2"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
+        state.setdefault("submission_candidate_archive", {})
+        state.setdefault("submission_candidate_selection", None)
         state.setdefault("dashboard_context", {"fields": [], "visualization": {}})
 
         # Read-time compatibility enrichment for pre-v3.3 state snapshots.
