@@ -637,6 +637,8 @@ def _evidence_fingerprint(record: Dict[str, Any]) -> str:
         "source": str(record.get("source", "")).strip(),
         "claim": " ".join(str(record.get("claim", "")).split()),
     }
+    if isinstance(record.get("field_metadata"), dict):
+        content["field_metadata"] = _copy_json(record["field_metadata"])
     return hashlib.sha256(_canonical_json(content).encode("utf-8")).hexdigest()
 
 
@@ -658,7 +660,7 @@ def _register_evidence_on_state(state: Dict[str, Any], record: Dict[str, Any]) -
     eid = normalized["id"]
     old = state.setdefault("evidence", {}).get(eid)
     if old:
-        content_keys = ("kind", "subject", "source", "observed_at", "claim")
+        content_keys = ("kind", "subject", "source", "observed_at", "claim", "field_metadata")
         if _canonical_json({key: old.get(key) for key in content_keys}) == _canonical_json(
             {key: normalized.get(key) for key in content_keys}
         ):
