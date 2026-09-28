@@ -4,7 +4,7 @@
 
 ## MD 首页 Dashboard
 
-每个 canonical run MD 的最前面固定渲染一个由当前 machine state + dashboard metadata 生成的首页。Audit Trail 仍保持 append-only；Dashboard 可以随着 Incumbent、Result、field metadata、visualization evidence 更新而重绘。
+每个 canonical run MD 的最前面固定渲染一个由当前 machine state + dashboard metadata 生成的首页。`Machine Decision Trail` 也由 machine state 确定性重绘；只有 `Append-only Notes` 是人工追加区。Dashboard 可以随着 Incumbent、Result、field metadata、visualization evidence 更新而重绘。
 
 固定顺序：
 
@@ -15,7 +15,7 @@
    - Root 与 Current Incumbent 的关键 metrics；若尚未 promotion，则显示单列 current value；
    - 当前完整 checks 表。
 3. **Field Information**
-   - actual field name / type / dataset / coverage / dateCoverage / exact description。
+   - actual field name / type / dataset / coverage / dateCoverage / exact description；registry 可保存 Root 与后续已授权 field 的 metadata，但这里只投影当前 Incumbent 实际使用的 fields。
 4. **Visualization / Diagnostics**
    - diagnostic Alpha ID / control 说明；
    - 实际取得的 recordset 名称；
@@ -23,6 +23,9 @@
    - 有可审计数值序列时生成真正的 SVG 图表：ordered time/PnL 用 line，bucket/cap/sector/industry 对比用 bar；不补点、不平滑、不猜缺失值。一个 run 的所有可绘制 chart 合并到同一个 `<run>_dashboard.svg` 中，MD 只引用这个 companion SVG；不得用 Unicode sparkline 替代主图，也不得恢复每-chart asset 文件。
 5. **Optimization Progression**
    - 已有 result 的 hypothesis / candidate Alpha / mechanism / status / Sharpe/Fitness/Returns/Margin/Turnover / new blockers。
+6. **Audit Trail / Machine Decision Trail**
+   - 对每个 H1–Hn 自动展开 Parent、route/mechanism、frozen principal hypothesis、mutation、success criteria、protected metrics、candidate fingerprint/expression/fields、preflight drift、真实 Result source+observed_at+metrics、machine evaluation、promotion/disposition 与 learned evidence claim；
+   - 不复制 hidden state 全量 JSON，不要求 controller 人工维护同一事实的第二份日志。
 
 Dashboard 更新使用：
 

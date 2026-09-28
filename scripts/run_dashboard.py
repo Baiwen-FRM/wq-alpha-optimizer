@@ -81,17 +81,22 @@ def _render_checks(snapshot: Dict[str, Any]) -> str:
 
 def _render_fields(context: Dict[str, Any], fallback: list[str]) -> str:
     raw = context.get("fields") if isinstance(context, dict) else []
-    rows = []
+    registry: Dict[str, Dict[str, Any]] = {}
     if isinstance(raw, list):
         for item in raw:
             if isinstance(item, str) and item.strip():
-                rows.append({"name": item.strip()})
+                registry[item.strip()] = {"name": item.strip()}
             elif isinstance(item, dict) and item.get("name"):
-                rows.append(item)
-    known = {str(x.get("name")) for x in rows}
+                registry[str(item["name"])] = item
+
+    # Dashboard Field Information describes the fields actually used by the
+    # current Incumbent. The context is a metadata registry and may contain
+    # pre-authorized fields that are not yet in the expression.
+    rows = []
     for name in fallback:
-        if str(name) not in known:
-            rows.append({"name": name})
+        rows.append(registry.get(str(name), {"name": str(name)}))
+    if not rows and registry:
+        rows = list(registry.values())
     if not rows:
         return "_Field information unavailable._\n"
     out = "| Field | Type | Dataset | Coverage | Date coverage | Description |\n|---|---|---|---:|---:|---|\n"
@@ -130,6 +135,120 @@ def _render_progression(state: Dict[str, Any]) -> str:
             f"{_cell(m.get('SHARPE'))} | {_cell(m.get('FITNESS'))} | {_cell(m.get('RETURNS'))} | "
             f"{_cell(m.get('MARGIN'))} | {_cell(m.get('TURNOVER'))} | {_cell(blockers)} |\n"
         )
+    return out
+
+
+def _compact_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _metric_map(snapshot: Dict[str, Any]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for key, value in (snapshot.get("metrics") or {}).items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[str(key).upper()] = float(value)
+    return out
+
+
+def _render_machine_decision_trail(state: Dict[str, Any]) -> str:
+    hypotheses = state.get("hypotheses") or {}
+    if not hypotheses:
+        return "_No hypothesis has been opened in this run._\n"
+
+    out = ""
+    candidates = state.get("candidates") or {}
+    evidence_registry = state.get("evidence") or {}
+
+    for hid, hyp in hypotheses.items():
+        hyp = hyp or {}
+        contract = hyp.get("contract") or {}
+        fingerprint = hyp.get("candidate_fingerprint")
+        candidate = candidates.get(fingerprint, {}) if fingerprint else {}
+        spec = candidate.get("spec") if isinstance(candidate.get("spec"), dict) else {}
+        preflight = candidate.get("preflight") if isinstance(candidate.get("preflight"), dict) else {}
+        result = hyp.get("result") if isinstance(hyp.get("result"), dict) else {}
+        result_snapshot = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+        evaluation = result.get("evaluation") if isinstance(result.get("evaluation"), dict) else {}
+        result_ref = result.get("evidence_ref") or candidate.get("result_evidence_ref")
+        learned = evidence_registry.get(result_ref, {}) if result_ref else {}
+
+        mechanism = contract.get("mechanism") or "unbound"
+        out += f"### {_cell(hid)} — {_cell(mechanism)}\n\n"
+        out += f"- **Machine status:** {_cell(hyp.get('status'))}\n"
+        out += f"- **Parent Incumbent:** {_cell(spec.get('parent_id'))}\n"
+        out += f"- **Route:** {_cell(hyp.get('route_id'))}; target={_cell(contract.get('target'))}\n"
+        out += f"- **Frozen hypothesis:** {_cell(contract.get('principal_hypothesis'))}\n"
+        out += f"- **Mutation:** `{_cell(_compact_json(contract.get('mutation') or {}))}`\n"
+        out += f"- **Success criteria:** `{_cell(_compact_json(contract.get('success_criteria') or []))}`\n"
+        out += f"- **Protected metrics:** `{_cell(_compact_json(contract.get('protected_metrics') or []))}`\n"
+        out += f"- **Failure meaning:** {_cell(contract.get('failure_meaning'))}\n"
+        refs = contract.get("evidence_refs") or []
+        if refs:
+            out += f"- **Evidence refs:** {_cell(', '.join(str(ref) for ref in refs))}\n"
+
+        if fingerprint:
+            out += f"- **Candidate fingerprint:** `{_cell(fingerprint)}`\n"
+        if spec:
+            out += f"- **Candidate fields:** {_cell(', '.join(str(x) for x in (spec.get('fields') or [])))}\n"
+            expression = str(spec.get("expression") or "").strip()
+            if expression:
+                out += "\n**Candidate expression**\n\n"
+                out += f"    {expression.replace(chr(10), ' ')}\n\n"
+        if preflight:
+            out += (
+                f"- **Preflight drift:** complexity_vs_root={_cell(preflight.get('complexity_delta_vs_root'))}; "
+                f"settings={_cell(', '.join(preflight.get('setting_diff_keys') or []))}; "
+                f"fields={_cell(_compact_json(preflight.get('field_diff') or {}))}\n"
+            )
+
+        if result_snapshot:
+            out += (
+                f"- **Result Alpha:** {_cell(result_snapshot.get('alpha_id'))}; "
+                f"source={_cell(result_snapshot.get('source'))}; "
+                f"observed_at={_cell(result_snapshot.get('observed_at'))}\n"
+            )
+            metrics = _metric_map(result_snapshot)
+            if metrics:
+                preferred = ["SHARPE", "FITNESS", "RETURNS", "MARGIN", "TURNOVER", "DRAWDOWN", "PNL"]
+                ordered = [name for name in preferred if name in metrics]
+                ordered += [name for name in metrics if name not in ordered]
+                out += "- **Result metrics:** " + "; ".join(
+                    f"{name}={_cell(metrics[name])}" for name in ordered
+                ) + "\n"
+
+        if evaluation:
+            failed_success = [
+                str((row.get("criterion") or {}).get("name") or "")
+                for row in evaluation.get("criterion_results", [])
+                if isinstance(row, dict) and not row.get("passed")
+            ]
+            failed_protection = [
+                str((row.get("policy") or {}).get("name") or "")
+                for row in evaluation.get("protected_results", [])
+                if isinstance(row, dict) and not row.get("passed")
+            ]
+            failed_root_protection = [
+                str((row.get("policy") or {}).get("name") or "")
+                for row in evaluation.get("root_protected_results", [])
+                if isinstance(row, dict) and not row.get("passed")
+            ]
+            out += (
+                f"- **Evaluation:** status={_cell(evaluation.get('status'))}; "
+                f"failed_success={_cell(', '.join(failed_success))}; "
+                f"failed_protection={_cell(', '.join(failed_protection))}; "
+                f"failed_root_protection={_cell(', '.join(failed_root_protection))}; "
+                f"new_blockers={_cell(', '.join(evaluation.get('new_blockers') or []))}; "
+                f"new_unresolved={_cell(', '.join(evaluation.get('new_unresolved_checks') or []))}\n"
+            )
+
+        decision = candidate.get("status") or result.get("disposition") or hyp.get("status")
+        out += f"- **Decision:** {_cell(decision)}\n"
+        if candidate.get("disposition_reason"):
+            out += f"- **Disposition reason:** {_cell(candidate.get('disposition_reason'))}\n"
+        if learned.get("claim"):
+            out += f"- **Learned evidence:** {_cell(learned.get('claim'))}\n"
+        out += "\n"
+
     return out
 
 
@@ -374,7 +493,17 @@ def enrich_context_with_charts(state: Dict[str, Any], payload: Dict[str, Any]) -
                 normalized.append(json.loads(json.dumps(row)))
             else:
                 raise ValueError("invalid field row")
-        context["fields"] = normalized
+        existing = {
+            str(row.get("name")): row
+            for row in (context.get("fields") or [])
+            if isinstance(row, dict) and row.get("name")
+        }
+        for row in normalized:
+            name = str(row["name"])
+            merged = dict(existing.get(name, {}))
+            merged.update(row)
+            existing[name] = merged
+        context["fields"] = list(existing.values())
 
     if "visualization" in payload:
         vis = payload.get("visualization")
@@ -469,5 +598,8 @@ def render_dashboard(state: Dict[str, Any]) -> str:
     out += "\n### Optimization Progression\n\n"
     out += _render_progression(state)
 
-    out += "\n---\n\n## Audit Trail\n"
+    out += "\n---\n\n## Audit Trail\n\n"
+    out += "### Machine Decision Trail\n\n"
+    out += _render_machine_decision_trail(state)
+    out += "\n### Append-only Notes\n"
     return out

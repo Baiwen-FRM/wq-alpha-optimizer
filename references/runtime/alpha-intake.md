@@ -28,7 +28,7 @@ Bootstrap 固定完成单一 run Markdown 的 start-or-resume、上述四类事�
 读取并记录当前认证平台返回的：
 
 - root Alpha ID、完整 expression/settings、region/delay/universe/instrument type；
-- 实际 fields 与 dataset/scope；对**实际用到的 field**，可便宜取得时同时记录 exact description、type、dataset、metadata coverage/dateCoverage；不要扫描无关字段池；
+- 实际 fields 与 dataset/scope；对**实际用到的 field**记录 exact description、type、dataset、metadata coverage/dateCoverage；不要扫描无关字段池。后续若某个新 field 被证明仍在 existing scope，注册 `FIELD_SCOPE` 时必须把同一套 exact metadata 结构化写入 evidence，再调用 `allow-field`；
 - Sharpe、Fitness、Returns、Margin、Turnover、Weight、coverage 等 Result；
 - 每项 submission check 的 `name/value/limit/status/observed_at/source`。
 
@@ -36,7 +36,7 @@ Root Baseline immutable；Incumbent 初始等于 Root。`PENDING` 是未知，�
 
 初始化 guard 时尽量把 Root 的 current Result/check snapshot 一并写入 `result_evidence`，这样后续 protected metric / new blocker 比较可以 machine-check。
 
-四类 Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的固定可读投影：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。如果 visualization 或某个 recordset 经有界恢复仍不可得，明确写 incomplete/unavailable，不猜，也不因此跳过后续分析。
+四类 Root facts 取得后立即更新 canonical MD 首页 Dashboard。首页不是 audit note，而是当前 state 的固定可读投影：**Expression + Settings / Result + Checks / Field Information / Visualization & Diagnostics**。Field registry 保存所有已审计 metadata，但 `Field Information` 只显示当前 Incumbent expression 实际使用的 fields；promotion 到新字段 candidate 后应立刻从 registry 显示 exact metadata。如果 visualization 或某个 recordset 经有界恢复仍不可得，明确写 incomplete/unavailable，不猜，也不因此跳过后续分析。
 
 ## Stage B — DIAGNOSE
 
@@ -80,7 +80,7 @@ python3 scripts/mechanism_synthesis.py \
 第一次正式 candidate 前，基于当前 Root/Incumbent 和本 run 已注册 evidence 建立一个可审计的 Alpha Profile，并生成持久的 mechanism-level plan：
 
 - 聚合 expression/settings、Result/checks、fields/dataset/type/coverage、PnL/时间稳定性、可用 exposure/concentration、expression structure 与历史实验；拿不到的内容写 unknown，不猜；
-- 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能审计到 candidate expression/settings/result/disposition **以及当时 frozen success/protection contract**；只有“以前试过”这种摘要不能自动继承 exhaustion。尤其不能把“candidate 有方向性改善但最终 check 仍 FAIL，所以当时被 REFUTED”的旧记录直接当成 mechanism-negative evidence；需要按当前 progressive contract 重新解释。身份不匹配、事实漂移或旧 contract 无法审计时，历史 run 只作背景，不阻止当前 run 重新诊断；
+- 历史 run 可以作为 negative/positive mechanism evidence，但必须先验证 **Root identity**：expression、完整 locked scope/settings 和相关 field source 必须一致，且当前关键 Result/check facts 没有 material drift。历史日志还必须能直接审计到 candidate expression/settings/result/disposition **以及当时 frozen success/protection contract**；当前 run 的 `Machine Decision Trail` 由 machine state 自动生成这些 H1–Hn 信息，不依赖人工 summary。只有“以前试过”这种摘要不能自动继承 exhaustion。尤其不能把“candidate 有方向性改善但最终 check 仍 FAIL，所以当时被 REFUTED”的旧记录直接当成 mechanism-negative evidence；需要按当前 progressive contract 重新解释。身份不匹配、事实漂移或旧 contract 无法审计时，历史 run 只作背景，不阻止当前 run 重新诊断；
 - Plan 必须携带当前 `synthesis`。每条 route 必须有 target、Primary owner、mechanism、evidence refs、`assessment_refs` 和 rationale；operator 存在性不是 route evidence。route 只能引用 `ACTIONABLE / PLAUSIBLE_PROBE` assessment，并保留该 assessment 实际使用的 evidence。**Route 必须已经 actionable**：当前 evidence 至少足以提出一个明确、可证伪的下一步 mechanism question；如果还只是“需要某个 discriminator”，先完成 `NEEDS_DIAGNOSTIC`，不要先建 route 再立刻 evidence-exhaust；
 - 一个上游 mechanism 可以解释多个 blocker，但只有 synthesis 对每个被声明的 blocker 都有 compatible assessment 时，route 才能写 `explains_blockers`；不能因为两个 blocker 同时存在就自行宣称共因；
 - route 数组顺序就是执行优先级；guard 会固化为 priority。可以规划多条 route，但同一时刻最多一条 `ACTIVE`，其余为 `PENDING`；planning 不预加载所有 Primary references；

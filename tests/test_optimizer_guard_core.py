@@ -61,17 +61,17 @@ class CoreGuardTests(TestCase):
         )
         self.assertTrue(result["initialized"], result)
 
-    def _register(self, store, evidence_id, kind, subject, source, claim, observed_at="2026-09-21T00:01:00Z"):
-        result = store.register_evidence(
-            {
-                "id": evidence_id,
-                "kind": kind,
-                "subject": subject,
-                "source": source,
-                "observed_at": observed_at,
-                "claim": claim,
-            }
-        )
+    def _register(self, store, evidence_id, kind, subject, source, claim, observed_at="2026-09-21T00:01:00Z", **extra):
+        record = {
+            "id": evidence_id,
+            "kind": kind,
+            "subject": subject,
+            "source": source,
+            "observed_at": observed_at,
+            "claim": claim,
+        }
+        record.update(extra)
+        result = store.register_evidence(record)
         self.assertTrue(result["ok"], result)
         return result
 
@@ -417,11 +417,135 @@ class CoreGuardTests(TestCase):
             "BRAIN:get_data_fields",
             "field_b is verified in the same existing dataset and scope as the incumbent source.",
             observed_at="2026-09-21T00:03:00Z",
+            field_metadata={
+                "name": "field_b",
+                "type": "MATRIX",
+                "dataset": "pv1",
+                "coverage": 0.98,
+                "dateCoverage": 1.0,
+                "description": "Verified test field B",
+                "visualizable": True,
+            },
         )
         allowed = self.store.allow_field("field_b", "E_FIELD")
         self.assertTrue(allowed["ok"], allowed)
         after = guard.preflight_candidate(candidate, self.store.read(), require_open_hypothesis=True)
         self.assertTrue(after["valid"], after)
+
+    def test_field_scope_requires_structured_metadata(self):
+        result = self.store.register_evidence(
+            {
+                "id": "E_FIELD_MISSING_METADATA",
+                "kind": "FIELD_SCOPE",
+                "subject": "field_b",
+                "source": "BRAIN:get_data_fields",
+                "observed_at": "2026-09-21T00:03:00Z",
+                "claim": "field_b is verified in the same existing dataset and scope as the incumbent source.",
+            }
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["reason"], "EVIDENCE_CONTRACT")
+
+    def test_promoted_field_metadata_is_rendered_exactly_in_current_dashboard(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        contract = self._contract(field_change_reason="field_b is verified in the same existing scope.")
+        self._open_hypothesis(contract=contract)
+        self._register(
+            self.store,
+            "E_FIELD_EXACT",
+            "FIELD_SCOPE",
+            "field_b",
+            "BRAIN:get_data_fields",
+            "field_b exact platform metadata is verified for the locked optimization scope.",
+            observed_at="2026-09-21T00:03:00Z",
+            field_metadata={
+                "name": "field_b",
+                "type": "MATRIX",
+                "dataset": "pv1",
+                "coverage": 0.98,
+                "dateCoverage": 1.0,
+                "description": "Verified test field B",
+                "visualizable": True,
+            },
+        )
+        allowed = self.store.allow_field("field_b", "E_FIELD_EXACT")
+        self.assertTrue(allowed["ok"], allowed)
+
+        candidate = self._candidate(
+            expression="rank(add(close,field_b))",
+            fields=["close", "field_b"],
+        )
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fp = reserved["fingerprint"]
+        self._post(self.store, fp, "SIM-FIELD-META")
+        evaluated = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-FIELD-META",
+                "simulation_id": "SIM-FIELD-META",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.2, "FITNESS": 1.55, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(evaluated["status"], "SUPPORTED", evaluated)
+        promoted = self.store.promote(candidate)
+        self.assertTrue(promoted["promoted"], promoted)
+
+        state = self.store.read()
+        field_rows = {
+            row["name"]: row
+            for row in state["dashboard_context"]["fields"]
+            if isinstance(row, dict) and row.get("name")
+        }
+        self.assertEqual(field_rows["field_b"]["dataset"], "pv1")
+        self.assertEqual(field_rows["field_b"]["coverage"], 0.98)
+        log_text = Path(state["run"]["log_path"]).read_text(encoding="utf-8")
+        self.assertIn("| field_b | MATRIX | pv1 | 0.98 | 1 | Verified test field B |", log_text)
+        self.assertNotIn("| field_b | unknown | unknown |", log_text)
+
+    def test_machine_decision_trail_renders_hypothesis_candidate_result_and_learning(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        self._open_hypothesis()
+        candidate = self._candidate()
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fp = reserved["fingerprint"]
+        self._post(self.store, fp, "SIM-AUDIT")
+        evaluated = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "CHILD-AUDIT",
+                "simulation_id": "SIM-AUDIT",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.1, "FITNESS": 1.55, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "FAIL"}],
+            },
+        )
+        self.assertEqual(evaluated["status"], "SUPPORTED", evaluated)
+        promoted = self.store.promote(candidate)
+        self.assertTrue(promoted["promoted"], promoted)
+
+        state = self.store.read()
+        log_text = Path(state["run"]["log_path"]).read_text(encoding="utf-8")
+        self.assertIn("### Machine Decision Trail", log_text)
+        self.assertIn("### H1 — signal_quality", log_text)
+        self.assertIn("**Frozen hypothesis:**", log_text)
+        self.assertIn("**Candidate expression**", log_text)
+        self.assertIn("rank(-close)", log_text)
+        self.assertIn("**Result Alpha:** CHILD-AUDIT", log_text)
+        self.assertIn("**Evaluation:** status=SUPPORTED", log_text)
+        self.assertIn("**Decision:** PROMOTED", log_text)
+        self.assertIn("**Learned evidence:** Candidate CHILD-AUDIT", log_text)
 
     def test_http_429_retry_budget_is_bounded(self):
         self.assertTrue(self._set_plan()["ok"])
