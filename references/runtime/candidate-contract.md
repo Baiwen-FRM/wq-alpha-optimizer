@@ -201,6 +201,8 @@ Success criterion 只有三种 observation type：
 
 Guard 在 hypothesis freeze 时就验证 observation schema：`metric` 名称必须真实存在于当前 Incumbent metrics；`check` 名称必须存在于当前 Incumbent checks；`check_value` 必须存在同名 check 且其 `value` 为 numeric；protected metric 也必须真实存在。类型不匹配直接返回 `HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH`，不得 reserve/POST。这样不能把 check.value 冒充 metric，也不能等看完 Result 后再改 criterion 类型。
 
+**Protected metrics 有两条同时成立的基线。** 对每个 predeclared `protected_metrics[]` policy，Guard 用同一个 frozen `rule/tolerance` 同时比较 candidate vs 当前 Parent/Incumbent，以及 candidate vs immutable Root。任一 gate 失败都足以 `REFUTED`。这避免 `Root 1.25 → Parent 1.15 → Candidate 1.06` 这种每一步各自未超 tolerance、但累计 Root degradation 已超过同一 tolerance 的 path-dependent promotion。若研究确实需要接受更大的 Root trade-off，必须在该 candidate simulation 前显式声明更大的 tolerance；不得靠 promotion 链隐式累积。
+
 `metric/check_value` 的 `min_change` 与 protected metric 的 `tolerance` 都必须在 simulation 前声明；不能看完结果后补。需要 field change 或 complexity growth 时，理由也必须在 hypothesis contract 中预声明。
 
 ### Preflight correction before reservation
@@ -299,6 +301,18 @@ Guard 必须验证：
 `SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
 
 只有 guard 计算为 `SUPPORTED` 的 result 才能 promotion。`REFUTED / INCONCLUSIVE` 不能靠调用者改布尔值绕过。
+
+### Submission-candidate archive / final selection
+
+Research lifecycle 与最终 submission choice 分离。每个 evaluated candidate 都继续保留原 hypothesis status；若该 candidate 的 authenticated/complete/auditable Result/check snapshot 自身满足 submission readiness，则同时写入 `submission_candidate_archive`。因此一个 Alpha 可以是“hypothesis REFUTED，但平台 submission-ready”；这表示它没有验证当时 frozen mechanism prediction，不等于它的真实平台结果应从终局候选集中消失。
+
+Archive 记录 candidate Alpha、parent/hypothesis/route、metrics、Root-relative deltas、readiness、当时的 protected policies 和 Root-protection result。只有 readiness=true 且 Root protection 通过的条目具有 `final_selection_eligible=true`。若 fresh refresh 更新了当前 Incumbent，匹配的 archive 条目必须同步刷新 readiness/Root comparison，并使旧 selection 失效。
+
+终局：
+- 只有一个 eligible ready candidate 时，Guard 可以自动选择；
+- 有多个 eligible ready candidates 时，`finish-run --status SUBMISSION_READY` 返回 `SUBMISSION_CANDIDATE_SELECTION_REQUIRED` 和完整 Root-relative comparison；
+- controller 必须自主比较后调用 `select-submission-candidate` 并记录 rationale；不向用户抛正常 in-scope 选择；
+- 被选 candidate 可以不是最后一个 Research Incumbent；最终报告必须分别写 Research Best/Incumbent 与 Selected Submission Candidate。
 
 ### Research progress is not submission readiness
 
