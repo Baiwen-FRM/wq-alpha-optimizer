@@ -76,7 +76,8 @@ def _initial_log_text(root_alpha_id: str, run_id: str, started_at: str, status: 
         f"- Started at: `{started_at}`\n"
         f"- Status: `{status}`\n\n"
         "> This file is the single canonical human-readable log for this optimizer run. "
-        "The dashboard below is regenerated from machine state; the audit trail remains append-only.\n\n"
+        "The dashboard and Machine Decision Trail are regenerated from machine state; "
+        "manual Append-only Notes remain append-only.\n\n"
     )
 
 def _render_run_log(state: Dict[str, Any]) -> str:
