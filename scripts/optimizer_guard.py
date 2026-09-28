@@ -1634,9 +1634,15 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
     return out
 
 
-def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+def _evaluate_contract(
+    contract: Dict[str, Any],
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+    root: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     before_metrics = _normalize_metrics((before or {}).get("metrics"))
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
+    root_metrics = _normalize_metrics((root or {}).get("metrics")) if root is not None else {}
     before_checks = _normalize_checks((before or {}).get("checks"))
     after_checks = _inherit_warning_policy(before_checks, (after or {}).get("checks"))
     before_check_map = _check_row_map(before_checks)
@@ -1711,6 +1717,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         )
 
     protected_results = []
+    root_protected_results = []
     for policy in contract.get("protected_metrics", []):
         name = policy["name"]
         if name not in before_metrics or name not in after_metrics:
@@ -1733,6 +1740,30 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
             }
         )
 
+        # Parent-relative safety alone is path-dependent: several individually
+        # acceptable promotions can accumulate into a Root-level degradation
+        # that the same frozen tolerance would have rejected in one step. When
+        # Root evidence is supplied, apply the *same predeclared policy* against
+        # immutable Root as a second conjunctive protection gate.
+        if root is not None:
+            if name not in root_metrics:
+                missing.append(f"root_protected_metric:{name}")
+                continue
+            root_value = root_metrics[name]
+            root_passed = (
+                after_value >= root_value - tolerance
+                if policy["rule"] == "not_lower"
+                else after_value <= root_value + tolerance
+            )
+            root_protected_results.append(
+                {
+                    "policy": policy,
+                    "root": root_value,
+                    "after": after_value,
+                    "passed": root_passed,
+                }
+            )
+
     before_check_names = set(before_check_map)
     after_check_names = set(after_check_map)
     missing_prior_checks = before_check_names - after_check_names
@@ -1752,6 +1783,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     decisive_failure = (
         any(not item["passed"] for item in criterion_results)
         or any(not item["passed"] for item in protected_results)
+        or any(not item["passed"] for item in root_protected_results)
         or bool(new_blockers)
     )
     if decisive_failure:
@@ -1762,6 +1794,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         criterion_results
         and all(item["passed"] for item in criterion_results)
         and all(item["passed"] for item in protected_results)
+        and all(item["passed"] for item in root_protected_results)
         and not new_blockers
     ):
         status = "SUPPORTED"
@@ -1772,6 +1805,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         "status": status,
         "criterion_results": criterion_results,
         "protected_results": protected_results,
+        "root_protected_results": root_protected_results,
         "missing": sorted(set(missing)),
         "old_blockers": sorted(old_blockers),
         "candidate_blockers": sorted(_fail_blockers(after_checks)),
@@ -1787,9 +1821,10 @@ def preview_candidate_result(
     contract: Dict[str, Any],
     incumbent_result: Dict[str, Any],
     candidate_result: Dict[str, Any],
+    root_result: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Pure mechanism preview used before deciding whether pending checks must wait."""
-    return _evaluate_contract(contract, incumbent_result, candidate_result)
+    return _evaluate_contract(contract, incumbent_result, candidate_result, root_result)
 
 
 class StateStore:
@@ -3215,7 +3250,12 @@ class StateStore:
             "metrics": metrics,
             "checks": checks,
         }
-        evaluation = _evaluate_contract(hyp["contract"], state["incumbent"].get("result_evidence", {}), result_snapshot)
+        evaluation = _evaluate_contract(
+            hyp["contract"],
+            state["incumbent"].get("result_evidence", {}),
+            result_snapshot,
+            (state.get("root_baseline") or {}).get("result_evidence", {}),
+        )
         result_evidence_id = f"E_CANDIDATE_RESULT_{fp}"
         criterion_failed = [
             str((item.get("criterion") or {}).get("name") or "")
@@ -3225,6 +3265,11 @@ class StateStore:
         protected_failed = [
             str((item.get("policy") or {}).get("name") or "")
             for item in evaluation.get("protected_results", [])
+            if not item.get("passed")
+        ]
+        root_protected_failed = [
+            str((item.get("policy") or {}).get("name") or "")
+            for item in evaluation.get("root_protected_results", [])
             if not item.get("passed")
         ]
         evidence_record = {
@@ -3237,6 +3282,7 @@ class StateStore:
                 f"Candidate {result_evidence['alpha_id']} for hypothesis {hid} evaluated "
                 f"{evaluation['status']}; failed_success={criterion_failed}; "
                 f"failed_protection={protected_failed}; "
+                f"failed_root_protection={root_protected_failed}; "
                 f"new_blockers={evaluation.get('new_blockers', [])}; "
                 f"new_unresolved={evaluation.get('new_unresolved_checks', [])}."
             ),
