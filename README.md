@@ -120,6 +120,15 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
 
 
+## v3.6.6 field metadata + readable audit trail
+
+- `FIELD_SCOPE` evidence now carries exact structured field metadata and that metadata participates in immutable evidence identity;
+- `allow-field` rejects field scope evidence without structured metadata and merges approved metadata into the Dashboard field registry;
+- the field registry may contain pre-authorized fields, but the visible Field Information table shows only fields actually used by the current Incumbent;
+- promotion to a candidate using a newly authorized field therefore renders exact type/dataset/coverage/dateCoverage/description instead of an `unknown` placeholder;
+- the canonical MD now renders a deterministic `Machine Decision Trail` for every H1–Hn, including frozen hypothesis contract, candidate expression/fingerprint, Result metrics/source, evaluation, decision and learned evidence;
+- complete machine state remains in the hidden embedded block; the readable trail is only a deterministic projection, while manual notes remain append-only.
+
 ## v3.6.1 pre-transport hypothesis recovery
 
 A deterministic candidate preflight failure no longer strands an OPEN hypothesis before any reservation exists. The new `withdraw-hypothesis` transition records the pre-reservation hypothesis as `WITHDRAWN`, keeps the active route/focus open, and allows a corrected contract to be frozen under a new hypothesis ID. The transition is blocked as soon as a candidate fingerprint/reservation exists, including after a reservation is released.
