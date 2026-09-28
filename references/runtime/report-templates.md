@@ -20,7 +20,7 @@
    - diagnostic Alpha ID / control 说明；
    - 实际取得的 recordset 名称；
    - 关键摘要；
-   - 有可审计数值序列时生成真正的 SVG 图表：ordered time/PnL 用 line，bucket/cap/sector/industry 对比用 bar；不补点、不平滑、不猜缺失值。一个 run 的所有可绘制 chart 合并到同一个 `<run>_dashboard.svg` 中，MD 只引用这个 companion SVG；不得用 Unicode sparkline 替代主图，也不得恢复每-chart asset 文件。
+   - 有可审计数值序列时生成真正的 SVG 图表。chart type 以 schema 为准而不是 recordset 名称：只要存在 date/day/year/time/timestamp 轴，就用 line/multi-line；只有没有时间轴的静态 category/bucket/cap/sector/industry comparison 才用 bar。numeric lower/upper bucket bounds 组合成一个 bucket label，不作为独立 series。不补点、不平滑、不猜缺失值。listing 中已经出现但经过一次额外有界 fetch 仍拿不到的 recordset，必须在 MD 明列 unavailable；已经 fetch 但没有安全 renderer 的明列 raw/table-only。一个 run 的所有可绘制 chart 合并到同一个 `<run>_dashboard.svg` 中，MD 只引用这个 companion SVG；不得用 Unicode sparkline 替代主图，也不得恢复每-chart asset 文件。
 5. **Optimization Progression**
    - 已有 result 的 hypothesis / candidate Alpha / mechanism / status / Sharpe/Fitness/Returns/Margin/Turnover / new blockers。
 6. **Audit Trail / Machine Decision Trail**

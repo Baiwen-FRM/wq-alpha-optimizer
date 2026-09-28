@@ -545,6 +545,12 @@ def _render_visualization(context: Dict[str, Any]) -> str:
             out += f"- {_cell(item)}\n"
     elif summary:
         out += f"- {_cell(summary)}\n"
+    unavailable = vis.get("unavailable_recordsets")
+    if isinstance(unavailable, list) and unavailable:
+        out += f"- Unavailable after bounded fetch: {_cell(', '.join(str(x) for x in unavailable))}\n"
+    unrendered = vis.get("unrendered_recordsets")
+    if isinstance(unrendered, list) and unrendered:
+        out += f"- Raw/table-only recordsets: {_cell(', '.join(str(x) for x in unrendered))}\n"
 
     chart_rows = [row for row in (vis.get("charts") or []) if isinstance(row, dict)]
     if chart_rows:

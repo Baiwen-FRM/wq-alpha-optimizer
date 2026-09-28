@@ -54,6 +54,55 @@ def _is_numeric_type(value: str) -> bool:
     return value in {"number", "integer", "float", "amount", "percent", "ratio", "currency"}
 
 
+def _temporal_index(names: list[str], types: list[str]) -> int | None:
+    temporal_names = {"date", "day", "year", "time", "timestamp"}
+    for index, (name, kind) in enumerate(zip(names, types)):
+        if kind in {"date", "datetime", "timestamp"} or name.lower() in temporal_names:
+            return index
+    return None
+
+
+def _category_index(names: list[str], types: list[str]) -> int | None:
+    preferred = {
+        "bucket", "capitalization", "cap", "sector", "industry", "subindustry",
+        "country", "region", "group", "label", "name",
+    }
+    for index, (name, kind) in enumerate(zip(names, types)):
+        if name.lower() in preferred and not _is_numeric_type(kind):
+            return index
+    for index, kind in enumerate(types):
+        if not _is_numeric_type(kind) and kind not in {"date", "datetime", "timestamp"}:
+            return index
+    return None
+
+
+def _boundary_indices(names: list[str], types: list[str]) -> tuple[int, int] | None:
+    lower_tokens = ("min", "lower", "from", "start", "left")
+    upper_tokens = ("max", "upper", "to", "end", "right")
+
+    def find(tokens: tuple[str, ...]) -> int | None:
+        for index, (name, kind) in enumerate(zip(names, types)):
+            normalized = name.lower().replace("_", "").replace("-", "")
+            if _is_numeric_type(kind) and any(token in normalized for token in tokens):
+                return index
+        return None
+
+    lower = find(lower_tokens)
+    upper = find(upper_tokens)
+    if lower is None or upper is None or lower == upper:
+        return None
+    return lower, upper
+
+
+def _format_bucket_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return f"{numeric:g}"
+    return str(value)
+
+
 def _title(recordset_name: str, recordset: dict) -> str:
     schema = recordset.get("schema") if isinstance(recordset, dict) else None
     if isinstance(schema, dict) and schema.get("title"):
@@ -68,11 +117,7 @@ def _line_chart(recordset_name: str, recordset: dict) -> dict | None:
     if not names or not rows:
         return None
 
-    x_index = None
-    for index, (name, kind) in enumerate(zip(names, types)):
-        if kind == "date" or name.lower() in {"date", "day", "year"}:
-            x_index = index
-            break
+    x_index = _temporal_index(names, types)
     if x_index is None:
         return None
 
@@ -134,19 +179,41 @@ def _bar_chart(recordset_name: str, recordset: dict) -> dict | None:
     if len(names) < 2 or not rows:
         return None
 
-    label_index = 0
+    category_index = _category_index(names, types)
+    boundaries = _boundary_indices(names, types) if category_index is None else None
+
+    excluded: set[int] = set()
+    if category_index is not None:
+        excluded.add(category_index)
+    elif boundaries is not None:
+        excluded.update(boundaries)
+    else:
+        # Preserve the legacy deterministic fallback for simple two-column
+        # bucket recordsets whose first bucket column is numeric.
+        category_index = 0
+        excluded.add(0)
+
     numeric_indices = [
         i for i, kind in enumerate(types)
-        if i != label_index and _is_numeric_type(kind)
+        if i not in excluded and _is_numeric_type(kind)
     ]
     if not numeric_indices:
         return None
 
-    labels = []
+    labels: list[str] = []
     values_by_column = [[] for _ in numeric_indices]
     for row in rows:
         if not isinstance(row, list) or len(row) < len(names):
             continue
+
+        if boundaries is not None:
+            lower, upper = boundaries
+            label = f"{_format_bucket_value(row[lower])}–{_format_bucket_value(row[upper])}"
+        elif category_index is not None:
+            label = str(row[category_index])
+        else:
+            continue
+
         numeric_values = []
         valid = True
         for column_index in numeric_indices:
@@ -157,7 +224,7 @@ def _bar_chart(recordset_name: str, recordset: dict) -> dict | None:
             numeric_values.append(float(value))
         if not valid:
             continue
-        labels.append(str(row[label_index]))
+        labels.append(label)
         for target, value in zip(values_by_column, numeric_values):
             target.append(value)
 
@@ -176,11 +243,21 @@ def _bar_chart(recordset_name: str, recordset: dict) -> dict | None:
     }
 
 
+
 def chart_from_recordset(recordset_name: str, recordset: dict) -> dict | None:
     # yearly-stats often mixes incomparable metrics; keep it as raw/table evidence
     # rather than forcing a misleading shared-axis chart.
     if recordset_name == "yearly-stats":
         return None
+
+    names = _column_names(recordset)
+    types = _column_types(recordset)
+
+    # Schema semantics outrank recordset naming. "-by-" recordsets can still be
+    # time series (for example PnL by capitalization/industry across dates).
+    # Those must be multi-line charts, not thousands of thin bars.
+    if _temporal_index(names, types) is not None:
+        return _line_chart(recordset_name, recordset)
     if "-by-" in recordset_name:
         return _bar_chart(recordset_name, recordset)
     return _line_chart(recordset_name, recordset)
@@ -216,13 +293,21 @@ def dashboard_visualization_from_recordsets(
         if isinstance(row, dict) and row.get("name")
     ]
     charts = charts_from_recordsets(recordsets)
+    rendered = {str(chart.get("id")) for chart in charts if isinstance(chart, dict) and chart.get("id")}
+    fetched = set(recordsets)
+    unavailable = [name for name in names if name not in fetched]
+    unrendered = [name for name in names if name in fetched and name not in rendered]
     return {
         "alpha_id": alpha_id,
         "control": control,
         "recordsets": names,
+        "unavailable_recordsets": unavailable,
+        "unrendered_recordsets": unrendered,
         "summary": [
             f"{len(names)} recordsets discovered.",
-            f"{len(charts)} recordsets have deterministic chart renderers; remaining recordsets stay as raw evidence.",
+            f"{len(charts)} recordsets have deterministic chart renderers.",
+            f"{len(unavailable)} listed recordsets were unavailable after bounded fetch.",
+            f"{len(unrendered)} fetched recordsets remain raw/table evidence.",
         ],
         "charts": charts,
     }

@@ -120,6 +120,15 @@ An empty Profile/Plan is valid only after the evidence+method synthesis gate pro
 - the canonical mechanism catalog is aligned with existing Sharpe/Fitness/Returns/Margin/Turnover/Sub/Robust/Ladder/Correlation/Weight/Data-quality/Investability references and unknown project checks route to definition resolution first.
 
 
+## v3.6.7 schema-driven SVG recordsets
+
+- recordset chart type is now determined from schema semantics, not the presence of `-by-` in the recordset name;
+- any recordset with a temporal axis renders as line/multi-line, preventing long PnL-by-cap/industry/country histories from becoming thousands of bars;
+- static bucket/category diagnostics remain bars, including numeric lower/upper bucket schemas such as Sharpe by Capitalization;
+- lower/upper bucket bounds are rendered as one human-readable bucket label and excluded from metric series;
+- a listed recordset gets one extra bounded fetch before being marked unavailable;
+- the MD explicitly distinguishes unavailable recordsets from fetched raw/table-only recordsets instead of silently dropping a key diagnostic.
+
 ## v3.6.6 field metadata + readable audit trail
 
 - `FIELD_SCOPE` evidence now carries exact structured field metadata and that metadata participates in immutable evidence identity;

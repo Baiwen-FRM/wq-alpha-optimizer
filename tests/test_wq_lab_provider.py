@@ -506,6 +506,127 @@ class WQLabProviderTests(TestCase):
         self.assertEqual(charts[1]["labels"], ["0-20", "20-40"])
         self.assertEqual(charts[1]["series"][0]["values"], [1.28, 1.45])
 
+    def test_by_recordset_with_date_axis_uses_multiline_not_bar(self):
+        recordset = {
+            "schema": {
+                "name": "pnl-by-capitalization",
+                "title": "PnL by Capitalization",
+                "properties": [
+                    {"name": "date", "title": "Date", "type": "date"},
+                    {"name": "0-20", "title": "0-20", "type": "amount"},
+                    {"name": "20-40", "title": "20-40", "type": "amount"},
+                ],
+            },
+            "records": [
+                ["2026-01-01", 100.0, 80.0],
+                ["2026-01-02", 110.0, 85.0],
+            ],
+        }
+
+        chart = rd.chart_from_recordset("pnl-by-capitalization", recordset)
+
+        self.assertEqual(chart["type"], "line")
+        self.assertEqual(chart["labels"], ["2026-01-01", "2026-01-02"])
+        self.assertEqual([row["name"] for row in chart["series"]], ["0-20", "20-40"])
+        self.assertEqual(chart["series"][0]["values"], [100.0, 110.0])
+
+    def test_sharpe_by_capitalization_numeric_bounds_render_as_bucket_bar(self):
+        recordset = {
+            "schema": {
+                "name": "sharpe-by-capitalization",
+                "title": "Sharpe by Capitalization",
+                "properties": [
+                    {"name": "lowerBound", "title": "Lower", "type": "number"},
+                    {"name": "upperBound", "title": "Upper", "type": "number"},
+                    {"name": "sharpe", "title": "Sharpe", "type": "number"},
+                ],
+            },
+            "records": [
+                [0.0, 0.2, 1.43],
+                [0.2, 0.4, 0.40],
+                [0.4, 0.6, 0.90],
+            ],
+        }
+
+        chart = rd.chart_from_recordset("sharpe-by-capitalization", recordset)
+
+        self.assertEqual(chart["type"], "bar")
+        self.assertEqual(chart["labels"], ["0–0.2", "0.2–0.4", "0.4–0.6"])
+        self.assertEqual([row["name"] for row in chart["series"]], ["sharpe"])
+        self.assertEqual(chart["series"][0]["values"], [1.43, 0.40, 0.90])
+
+    def test_dashboard_reports_unavailable_and_unrendered_recordsets(self):
+        listing = {
+            "results": [
+                {"name": "pnl"},
+                {"name": "sharpe-by-capitalization"},
+                {"name": "yearly-stats"},
+            ]
+        }
+        recordsets = {
+            "pnl": {
+                "schema": {
+                    "name": "pnl",
+                    "title": "PnL",
+                    "properties": [
+                        {"name": "date", "type": "date"},
+                        {"name": "pnl", "type": "amount"},
+                    ],
+                },
+                "records": [["2026-01-01", 100.0]],
+            },
+            "yearly-stats": {
+                "schema": {
+                    "name": "yearly-stats",
+                    "title": "Yearly Statistics",
+                    "properties": [
+                        {"name": "year", "type": "integer"},
+                        {"name": "sharpe", "type": "number"},
+                    ],
+                },
+                "records": [[2025, 2.0]],
+            },
+        }
+
+        vis = rd.dashboard_visualization_from_recordsets("A1", "existing", listing, recordsets)
+
+        self.assertEqual(vis["unavailable_recordsets"], ["sharpe-by-capitalization"])
+        self.assertEqual(vis["unrendered_recordsets"], ["yearly-stats"])
+        self.assertEqual([chart["id"] for chart in vis["charts"]], ["pnl"])
+
+    def test_recordset_fetch_retries_once_after_listing_becomes_available(self):
+        class FakeWQ:
+            calls = 0
+
+            @classmethod
+            def get_alpha_recordset(cls, session, alpha_id, name):
+                cls.calls += 1
+                if cls.calls == 1:
+                    return {}
+                return {
+                    "schema": {
+                        "name": name,
+                        "properties": [
+                            {"name": "bucket", "type": "string"},
+                            {"name": "sharpe", "type": "number"},
+                        ],
+                    },
+                    "records": [["0-20", 1.2]],
+                }
+
+        data = provider._fetch_recordset_with_retry(
+            object(),
+            FakeWQ,
+            "A1",
+            "sharpe-by-capitalization",
+            attempts=2,
+            sleep_seconds=0,
+        )
+
+        self.assertIsInstance(data, dict)
+        self.assertEqual(FakeWQ.calls, 2)
+        self.assertEqual(data["records"][0], ["0-20", 1.2])
+
     def test_missing_line_values_are_dropped_not_imputed(self):
         recordset = {
             "schema": {
