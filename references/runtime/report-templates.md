@@ -138,6 +138,7 @@ End reason: {SUCCESS / SUBMISSION_READY / COMPLETED_WITH_EXHAUSTION / USER_STOP 
 
 Root Alpha: {id}; key metrics={...}
 Research Best / Incumbent: {id / root}; improvement={...}
+Selected Submission Candidate: {id / none}; Root-relative comparison={...}
 Submission Ready: {YES / NO / unknown}
 Remaining blockers: {...}
 Remaining unknowns: {...}
@@ -153,4 +154,4 @@ Plan revisions / final re-plan: {...}
 
 ### Submission Ready reporting
 
-只有 guard 的 `submission_readiness.ready=true` 才写 `Submission Ready: YES`。若仍有 FAIL/policy-blocking check、未分类 WARNING、PENDING/UNKNOWN、缺失/未认证/不可审计 snapshot，则写 `NO` 或 `unknown` 并列出 reason；普通 `SUCCESS` 不自动升级为 Submission Ready。
+只有 Guard 已完成 final candidate selection，且 selected candidate 的 archived readiness=true、Root protection eligible=true 时才写 `Submission Ready: YES`。若存在多个 eligible ready candidates 但尚未 selection、仍有 FAIL/policy-blocking check、未分类 WARNING、PENDING/UNKNOWN、Root protection failure、缺失/未认证/不可审计 snapshot，则写 `NO` 或 `unknown` 并列出 reason；普通 `SUCCESS` 不自动升级为 Submission Ready。
