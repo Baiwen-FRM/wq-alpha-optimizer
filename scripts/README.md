@@ -22,8 +22,7 @@ are terminal. A repeated final re-plan for the same Incumbent is allowed only wh
 `withdraw-hypothesis` is the narrow pre-reservation correction path: it only works while an OPEN hypothesis has no candidate fingerprint and no candidate/simulation record. Use it when deterministic preflight finds a contract omission before reserve/POST. It records the old hypothesis as WITHDRAWN and requires a new hypothesis ID. It is deliberately blocked after reserve, including after RELEASED.
 
 `finish-run --status COMPLETED_WITH_EXHAUSTION` requires the final re-plan
-gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the selected Root-protected submission candidate
-Incumbent check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
+gate and an EXHAUSTED plan. `SUBMISSION_READY` is machine-gated by the selected Root-protected submission candidate's archived Result/check snapshot. `USER_STOP`, `SCOPE_BOUNDARY`, and
 `PLATFORM_UNRECOVERABLE` are explicit terminal freeze states.
 
 Guard 不能独立验证 live BRAIN operator signature、dataset semantics、经济因果或远端 source authenticity；这些必须来自当前认证平台 evidence 与 Primary defect reference。
@@ -68,6 +67,6 @@ It performs local WQ Lab capability preflight, starts or resumes the canonical n
 
 `wq_lab_provider.py` is the lower-level Skill-side bridge to the user's local `wq_lib`. It does not contain BRAIN HTTP implementations and does not vendor WQ Lab. Its CLI remains available for debugging/recovery; normal execution goes through `bootstrap_run.py`.
 
-`recordset_dashboard.py` deterministically maps raw BRAIN recordsets to chart specs; `run_dashboard.py` renders those specs. Rendering/MD code remains in this Skill, never in WQ Lab.
+`recordset_dashboard.py` deterministically maps raw BRAIN recordsets to chart specs from schema semantics; `run_dashboard.py` renders those specs. A temporal axis (`date/day/year/time/timestamp`) always wins over the recordset name and produces line/multi-line SVG; only non-temporal category/bucket comparisons produce bar charts. Numeric lower/upper bucket bounds are combined into labels instead of plotted as fake series. After listing, each recordset gets at most one extra bounded fetch; listed-but-unavailable and fetched-but-unrendered recordsets are reported explicitly. Rendering/MD code remains in this Skill, never in WQ Lab.
 
 The local WQ Lab must expose the three additive generic reads listed in `../references/runtime/wq-lab-provider.md`. No silent CNHKMCP fallback is used.
