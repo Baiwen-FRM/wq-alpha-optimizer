@@ -737,6 +737,150 @@ class CoreGuardTests(TestCase):
         self.assertFalse(stored_warning["policy_blocking"])
 
 
+    def test_root_relative_protection_blocks_cumulative_incumbent_drift(self):
+        contract = {
+            "success_criteria": [
+                {"type": "metric", "name": "SHARPE", "direction": "higher", "min_change": 0.0}
+            ],
+            "protected_metrics": [
+                {"name": "FITNESS", "rule": "not_lower", "tolerance": 0.10}
+            ],
+        }
+        root = {
+            "metrics": {"SHARPE": 2.95, "FITNESS": 1.25},
+            "checks": [{"name": "PROD_CORRELATION", "status": "FAIL"}],
+        }
+        incumbent = {
+            "metrics": {"SHARPE": 2.80, "FITNESS": 1.15},
+            "checks": [{"name": "PROD_CORRELATION", "status": "FAIL"}],
+        }
+        candidate = {
+            "metrics": {"SHARPE": 2.81, "FITNESS": 1.06},
+            "checks": [{"name": "PROD_CORRELATION", "status": "PASS"}],
+        }
+
+        result = guard._evaluate_contract(contract, incumbent, candidate, root)
+
+        self.assertEqual(result["status"], "REFUTED", result)
+        self.assertTrue(result["protected_results"][0]["passed"])
+        self.assertFalse(result["root_protected_results"][0]["passed"])
+        self.assertEqual(result["root_protected_results"][0]["root"], 1.25)
+        self.assertEqual(result["root_protected_results"][0]["after"], 1.06)
+
+    def test_submission_ready_refuted_candidate_is_archived_but_root_protection_controls_eligibility(self):
+        self.assertTrue(self._set_plan()["ok"])
+        self._open_focus()
+        contract = self._contract(
+            protected=[{"name": "FITNESS", "rule": "not_lower", "tolerance": 0.10}]
+        )
+        self._open_hypothesis(contract=contract)
+        candidate = self._candidate()
+        reserved = self.store.reserve_simulation(candidate)
+        self.assertTrue(reserved["allowed"], reserved)
+        fp = reserved["fingerprint"]
+        self._post(self.store, fp, "SIM-ARCHIVE")
+
+        result = self.store.evaluate_result(
+            candidate,
+            {
+                "alpha_id": "READY-BUT-ROOT-UNSAFE",
+                "simulation_id": "SIM-ARCHIVE",
+                "observed_at": guard._now_iso(),
+                "source": "BRAIN:test",
+                "response_complete": True,
+                "authenticated": True,
+                "metrics": {"SHARPE": 2.10, "FITNESS": 1.35, "TURNOVER": 0.2},
+                "checks": [{"name": "LOW_SHARPE", "status": "PASS"}],
+            },
+        )
+        self.assertEqual(result["status"], "REFUTED", result)
+        archived = self.store.read()["submission_candidate_archive"]["READY-BUT-ROOT-UNSAFE"]
+        self.assertTrue(archived["readiness"]["ready"])
+        self.assertFalse(archived["root_protection_passed"])
+        self.assertFalse(archived["final_selection_eligible"])
+        self.assertEqual(archived["hypothesis_status"], "REFUTED")
+
+    def test_multiple_ready_candidates_require_root_relative_final_selection(self):
+        store = guard.StateStore(Path(self.tempdir.name) / "selection.json", "SEL")
+        self._initialize(
+            store,
+            checks=[{"name": "LOW_SHARPE", "status": "PASS", "value": 2.2, "limit": 1.58}],
+        )
+        state = store.read()
+        state["incumbent"] = {
+            **state["incumbent"],
+            "alpha_id": "CAND-B",
+        }
+        state["optimization_plan"] = {
+            "revision": 2,
+            "based_on_evidence_revision": state["evidence_revision"],
+            "final_replan_used": True,
+            "final_replan_evidence_revision": state["evidence_revision"],
+            "status": "EXHAUSTED",
+            "routes": [],
+            "incumbent_alpha_id": "CAND-B",
+            "synthesis": {"blockers": [], "enhancements": []},
+        }
+        ready_snapshot = {
+            "response_complete": True,
+            "authenticated": True,
+            "observed_at": guard._now_iso(),
+            "source": "BRAIN:test",
+            "checks": [{"name": "LOW_SHARPE", "status": "PASS"}],
+        }
+        state["submission_candidate_archive"] = {
+            "CAND-A": {
+                "alpha_id": "CAND-A",
+                "hypothesis_id": "H_A",
+                "hypothesis_status": "REFUTED",
+                "parent_id": "SEL",
+                "metrics": {"SHARPE": 2.2, "FITNESS": 1.45},
+                "root_metric_deltas": {"SHARPE": 0.2, "FITNESS": -0.05},
+                "root_protection_passed": True,
+                "final_selection_eligible": True,
+                "readiness": {"ready": True},
+                "result_evidence": {
+                    **ready_snapshot,
+                    "metrics": {"SHARPE": 2.2, "FITNESS": 1.45},
+                },
+            },
+            "CAND-B": {
+                "alpha_id": "CAND-B",
+                "hypothesis_id": "H_B",
+                "hypothesis_status": "SUPPORTED",
+                "parent_id": "CAND-A",
+                "metrics": {"SHARPE": 2.15, "FITNESS": 1.48},
+                "root_metric_deltas": {"SHARPE": 0.15, "FITNESS": -0.02},
+                "root_protection_passed": True,
+                "final_selection_eligible": True,
+                "readiness": {"ready": True},
+                "result_evidence": {
+                    **ready_snapshot,
+                    "metrics": {"SHARPE": 2.15, "FITNESS": 1.48},
+                },
+            },
+        }
+        store._write(state)
+
+        blocked = store.finish_run("SUBMISSION_READY", "Compare all ready candidates.")
+        self.assertFalse(blocked["ok"], blocked)
+        self.assertEqual(blocked["reason"], "SUBMISSION_CANDIDATE_SELECTION_REQUIRED")
+        self.assertEqual(set(blocked["eligible_candidate_ids"]), {"CAND-A", "CAND-B"})
+
+        selected = store.select_submission_candidate(
+            "CAND-A",
+            "CAND-A has the preferred Root-relative trade-off after comparing the ready archive.",
+        )
+        self.assertTrue(selected["ok"], selected)
+        self.assertEqual(
+            set(selected["selection"]["compared_candidate_ids"]),
+            {"CAND-A", "CAND-B"},
+        )
+        finished = store.finish_run("SUBMISSION_READY", "Selected from the Root-relative candidate archive.")
+        self.assertTrue(finished["ok"], finished)
+        self.assertEqual(finished["run"]["submission_candidate_alpha_id"], "CAND-A")
+
+
     def test_new_unresolved_check_makes_candidate_inconclusive(self):
         self.assertTrue(self._set_plan()["ok"])
         self._open_focus()
