@@ -10,7 +10,9 @@ CLI：
 python3 scripts/optimizer_guard.py --help
 ```
 
-`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. Full incoming chart series are rendered immediately into one sibling `<run>_dashboard.svg`; the embedded Guard state keeps only compact chart projections for resume/audit efficiency. The Markdown references that one SVG. No Unicode sparkline is used as the primary visualization, and no `assets/` or per-chart SVG files are created.
+`update-dashboard` enriches the canonical MD header with field metadata and visualization diagnostics. Expression/settings/results/checks are rendered directly from current guard state. The field metadata context acts as a registry: Root metadata arrives from intake, later `FIELD_SCOPE` evidence adds exact metadata for newly authorized fields, and the rendered table shows only fields used by the current Incumbent. Full incoming chart series are rendered immediately into one sibling `<run>_dashboard.svg`; the embedded Guard state keeps only compact chart projections for resume/audit efficiency. The Markdown references that one SVG. No Unicode sparkline is used as the primary visualization, and no `assets/` or per-chart SVG files are created.
+
+The same Markdown also renders a deterministic `Machine Decision Trail` from Guard state. It exposes each H1–Hn frozen contract, candidate payload identity, Result/evaluation, promotion/disposition and learned evidence claim. This is a readable projection of existing state, not a second hand-maintained log; only the later `Append-only Notes` section is manually appended.
 
 Planning transitions are intentionally small: `set-plan`, `activate-route`,
 `close-route`, `exhaust-focus`, `refresh-incumbent`, and `finish-run`.
