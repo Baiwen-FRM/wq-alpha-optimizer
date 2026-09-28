@@ -3713,22 +3713,41 @@ class StateStore:
 
                 eligible = _eligible_submission_candidate_ids(state)
                 if not eligible:
+                    # Preserve current-snapshot readiness diagnostics for runs
+                    # that never produced an archived candidate (including a
+                    # pure readiness check before any optimization plan exists).
+                    current_readiness = _submission_readiness(state)
+                    if not current_readiness.get("ready"):
+                        return {
+                            "ok": False,
+                            "reason": current_readiness.get("reason"),
+                            "readiness": current_readiness,
+                            "comparison": _submission_candidate_comparison(state),
+                        }
                     root_alpha_id = str((state.get("root_baseline") or {}).get("alpha_id") or "")
                     incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
-                    if root_alpha_id and incumbent_alpha_id == root_alpha_id:
+                    if plan and root_alpha_id and incumbent_alpha_id == root_alpha_id:
                         return {
                             "ok": False,
                             "reason": "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
                             "incumbent_alpha_id": incumbent_alpha_id,
                         }
-                    return {
-                        "ok": False,
-                        "reason": "NO_ELIGIBLE_SUBMISSION_CANDIDATE",
-                        "comparison": _submission_candidate_comparison(state),
-                    }
 
-                selection = state.get("submission_candidate_selection")
-                if not isinstance(selection, dict):
+                    # Compatibility path for a readiness-only run or an older
+                    # in-flight state created before the archive existed.
+                    state["submission_candidate_selection"] = {
+                        "alpha_id": incumbent_alpha_id,
+                        "reason": "Current Incumbent is ready; no evaluated candidate archive exists for this run.",
+                        "selected_at": _now_iso(),
+                        "compared_candidate_ids": [],
+                        "root_relative_comparison": [],
+                        "legacy_current_snapshot_fallback": True,
+                    }
+                    run["submission_candidate_alpha_id"] = incumbent_alpha_id
+                    selection = state["submission_candidate_selection"]
+                else:
+                    selection = state.get("submission_candidate_selection")
+                if eligible and not isinstance(selection, dict):
                     if len(eligible) == 1:
                         selected_id = eligible[0]
                         selection = {
@@ -3748,7 +3767,7 @@ class StateStore:
                         }
 
                 selected_id = str(selection.get("alpha_id") or "")
-                if selected_id not in eligible:
+                if eligible and selected_id not in eligible:
                     return {
                         "ok": False,
                         "reason": "SELECTED_SUBMISSION_CANDIDATE_NOT_ELIGIBLE",
@@ -3756,18 +3775,19 @@ class StateStore:
                         "eligible_candidate_ids": eligible,
                         "comparison": _submission_candidate_comparison(state),
                     }
-                selected_entry = (state.get("submission_candidate_archive") or {}).get(selected_id) or {}
-                selected_readiness = _result_snapshot_readiness(
-                    selected_entry.get("result_evidence") or {}
-                )
-                if not selected_readiness.get("ready"):
-                    return {
-                        "ok": False,
-                        "reason": selected_readiness.get("reason"),
-                        "readiness": selected_readiness,
-                        "selected_alpha_id": selected_id,
-                    }
-                run["submission_candidate_alpha_id"] = selected_id
+                if eligible:
+                    selected_entry = (state.get("submission_candidate_archive") or {}).get(selected_id) or {}
+                    selected_readiness = _result_snapshot_readiness(
+                        selected_entry.get("result_evidence") or {}
+                    )
+                    if not selected_readiness.get("ready"):
+                        return {
+                            "ok": False,
+                            "reason": selected_readiness.get("reason"),
+                            "readiness": selected_readiness,
+                            "selected_alpha_id": selected_id,
+                        }
+                    run["submission_candidate_alpha_id"] = selected_id
             elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
                 return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
