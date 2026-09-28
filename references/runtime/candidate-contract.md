@@ -158,7 +158,7 @@ ACTIVE route 的正常 terminal transition 需要满足至少一个条件：
 
 `run.status` 进入 `SUCCESS`、`SUBMISSION_READY`、`COMPLETED_WITH_EXHAUSTION`、`USER_STOP`、`SCOPE_BOUNDARY` 或 `PLATFORM_UNRECOVERABLE` 后是 terminal boundary；所有 research-state mutation 都拒绝并返回 `RUN_ALREADY_TERMINAL`。`append_log` 只追加最终人工说明，不改变研究状态，因此仍可使用。
 
-其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求当前 Incumbent snapshot 的 authenticated/complete/auditable checks 无 blocking/unresolved 项，并且不能存在 ACTIVE/STALE research plan；若完成 final re-plan 后 Incumbent 仍是 Root，Guard 要求使用 `COMPLETED_WITH_EXHAUSTION` 表达“未找到更优 Incumbent”.
+其中 `USER_STOP / SCOPE_BOUNDARY / PLATFORM_UNRECOVERABLE` 是显式冻结出口，可以保留当时仍 OPEN 的研究对象作为停止证据；其它正常完成状态要求没有 OPEN focus/hypothesis。`COMPLETED_WITH_EXHAUSTION` 还要求当前 plan 为 `EXHAUSTED` 且该 Incumbent cycle 的 final re-plan 已使用。`SUBMISSION_READY` 额外要求 selected submission candidate 的 archived snapshot 为 authenticated/complete/auditable、无 blocking/unresolved 项、Root protection 通过，并且不能存在 ACTIVE/STALE research plan。若有多个 eligible ready candidates，必须先完成 archive comparison + selection；若优化 cycle 已完成且没有 eligible evaluated candidate、Incumbent 仍是 Root，Guard 要求使用 `COMPLETED_WITH_EXHAUSTION` 表达“未找到更优 Incumbent”.
 
 ## 4. Focus
 
@@ -200,6 +200,8 @@ Success criterion 只有三种 observation type：
 - `check_value`：读取指定 submission check row 的数值 `value`，声明 `higher / lower + min_change`。它用于诸如 sub-universe Sharpe 这类“平台把数值放在 check row，而不是普通 Result metrics”的方向性预测。
 
 Guard 在 hypothesis freeze 时就验证 observation schema：`metric` 名称必须真实存在于当前 Incumbent metrics；`check` 名称必须存在于当前 Incumbent checks；`check_value` 必须存在同名 check 且其 `value` 为 numeric；protected metric 也必须真实存在。类型不匹配直接返回 `HYPOTHESIS_OBSERVATION_SCHEMA_MISMATCH`，不得 reserve/POST。这样不能把 check.value 冒充 metric，也不能等看完 Result 后再改 criterion 类型。
+
+**Protected metrics 有两条同时成立的基线。** 对每个 predeclared `protected_metrics[]` policy，Guard 用同一个 frozen `rule/tolerance` 同时比较 candidate vs 当前 Parent/Incumbent，以及 candidate vs immutable Root。任一 gate 失败都足以 `REFUTED`。这避免 `Root 1.25 → Parent 1.15 → Candidate 1.06` 这种每一步各自未超 tolerance、但累计 Root degradation 已超过同一 tolerance 的 path-dependent promotion。若研究确实需要接受更大的 Root trade-off，必须在该 candidate simulation 前显式声明更大的 tolerance；不得靠 promotion 链隐式累积。
 
 `metric/check_value` 的 `min_change` 与 protected metric 的 `tolerance` 都必须在 simulation 前声明；不能看完结果后补。需要 field change 或 complexity growth 时，理由也必须在 hypothesis contract 中预声明。
 
@@ -296,9 +298,21 @@ Guard 必须验证：
 - success criteria 与 protected metrics 是否成立；
 - candidate 是否引入**新的** blocking check 或 unresolved check。`FAIL` 永远 blocking。WARNING policy 在 Incumbent 上只决定一次；candidate/refresh 对同名 WARNING 由 Guard 自动继承该 `policy_classified/policy_blocking`，真正新出现的 WARNING 仍 unresolved。Incumbent 原本已经 PENDING 的 check，在 candidate 仍是同一 PENDING 时不是 new unresolved。正常 executor 对“相对 Incumbent 新出现的 PENDING/UNKNOWN/RUNNING/PROCESSING”做有界等待，但在等待前先做纯机制 preview：只要任何已观察 success criterion / protected metric 明确失败，或出现新 blocker，conjunctive hypothesis 已经足以 `REFUTED`，无关的 correlation PENDING/缺行不能把这个负结论覆盖成 `INCONCLUSIVE`。只有 candidate 仍可能 `SUPPORTED` 时，未解决 safety/check observations 才必须继续等待/进入 reconciliation boundary。
 
-`SUBMISSION_READY` 仍然更严格：当前 Incumbent 的 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。因此 research evaluation 和 submission readiness 共用一份真实 snapshot，但判定职责不同，不再增加第二套 completeness flag。
+单个 candidate 的 submission readiness 仍然严格：其 check snapshot 必须非空、authenticated、response_complete、source/timestamp 可审计；`FAIL` 或 `policy_blocking:true` 会阻止 readiness；任何仍为 `PENDING/UNKNOWN` 等非终态的 check 也是 unresolved；WARNING 若要作为 non-blocking 接受，必须由 controller 基于当前平台/项目规则显式给出 `policy_classified:true, policy_blocking:false`。Research evaluation 与 archive readiness 共用该 candidate 的同一份真实 snapshot；终局 `SUBMISSION_READY` 再要求从 ready archive 中选择 Root-protected eligible candidate。
 
 只有 guard 计算为 `SUPPORTED` 的 result 才能 promotion。`REFUTED / INCONCLUSIVE` 不能靠调用者改布尔值绕过。
+
+### Submission-candidate archive / final selection
+
+Research lifecycle 与最终 submission choice 分离。每个 evaluated candidate 都继续保留原 hypothesis status；若该 candidate 的 authenticated/complete/auditable Result/check snapshot 自身满足 submission readiness，则同时写入 `submission_candidate_archive`。因此一个 Alpha 可以是“hypothesis REFUTED，但平台 submission-ready”；这表示它没有验证当时 frozen mechanism prediction，不等于它的真实平台结果应从终局候选集中消失。
+
+Archive 记录 candidate Alpha、parent/hypothesis/route、metrics、Root-relative deltas、readiness、当时的 protected policies 和 Root-protection result。只有 readiness=true 且 Root protection 通过的条目具有 `final_selection_eligible=true`。若 fresh refresh 更新了当前 Incumbent，匹配的 archive 条目必须同步刷新 readiness/Root comparison，并使旧 selection 失效。
+
+终局：
+- 只有一个 eligible ready candidate 时，Guard 可以自动选择；
+- 有多个 eligible ready candidates 时，`finish-run --status SUBMISSION_READY` 返回 `SUBMISSION_CANDIDATE_SELECTION_REQUIRED` 和完整 Root-relative comparison；
+- controller 必须自主比较后调用 `select-submission-candidate` 并记录 rationale；不向用户抛正常 in-scope 选择；
+- 被选 candidate 可以不是最后一个 Research Incumbent；最终报告必须分别写 Research Best/Incumbent 与 Selected Submission Candidate。
 
 ### Research progress is not submission readiness
 

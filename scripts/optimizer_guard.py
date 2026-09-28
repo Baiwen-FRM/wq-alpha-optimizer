@@ -644,11 +644,10 @@ def _terminal_rejection(state: Dict[str, Any]) -> Dict[str, Any] | None:
     return None
 
 
-def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
-    incumbent = state.get("incumbent") or {}
-    if not incumbent:
+def _result_snapshot_readiness(snapshot: Dict[str, Any] | None) -> Dict[str, Any]:
+    evidence = snapshot or {}
+    if not evidence:
         return {"ready": False, "reason": "STATE_NOT_INITIALIZED", "blockers": [], "unresolved_checks": []}
-    evidence = incumbent.get("result_evidence") or {}
     if not evidence.get("response_complete") or not evidence.get("authenticated"):
         return {"ready": False, "reason": "READINESS_EVIDENCE_INCOMPLETE", "blockers": [], "unresolved_checks": []}
     source = evidence.get("source")
@@ -678,6 +677,184 @@ def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
         "observed_at": observed_at,
         "source": source,
     }
+
+
+def _submission_readiness(state: Dict[str, Any]) -> Dict[str, Any]:
+    incumbent = state.get("incumbent") or {}
+    if not incumbent:
+        return {"ready": False, "reason": "STATE_NOT_INITIALIZED", "blockers": [], "unresolved_checks": []}
+    return _result_snapshot_readiness(incumbent.get("result_evidence") or {})
+
+
+def _root_metric_deltas(state: Dict[str, Any], metrics: Dict[str, Any]) -> Dict[str, float]:
+    root_metrics = _normalize_metrics(
+        ((state.get("root_baseline") or {}).get("result_evidence") or {}).get("metrics")
+    )
+    current_metrics = _normalize_metrics(metrics)
+    return {
+        name: current_metrics[name] - root_metrics[name]
+        for name in sorted(set(root_metrics) & set(current_metrics))
+    }
+
+
+def _root_protection_from_policies(
+    policies: list[Dict[str, Any]],
+    root_result: Dict[str, Any],
+    candidate_result: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    root_metrics = _normalize_metrics((root_result or {}).get("metrics"))
+    candidate_metrics = _normalize_metrics((candidate_result or {}).get("metrics"))
+    rows = []
+    for policy in policies:
+        name = str(policy.get("name") or "").upper()
+        if name not in root_metrics or name not in candidate_metrics:
+            rows.append(
+                {
+                    "policy": policy,
+                    "root": root_metrics.get(name),
+                    "after": candidate_metrics.get(name),
+                    "passed": False,
+                    "reason": "ROOT_PROTECTED_METRIC_MISSING",
+                }
+            )
+            continue
+        tolerance = float(policy.get("tolerance", 0.0))
+        root_value = root_metrics[name]
+        after_value = candidate_metrics[name]
+        passed = (
+            after_value >= root_value - tolerance
+            if policy.get("rule") == "not_lower"
+            else after_value <= root_value + tolerance
+        )
+        rows.append(
+            {
+                "policy": policy,
+                "root": root_value,
+                "after": after_value,
+                "passed": passed,
+            }
+        )
+    return rows
+
+
+def _archive_submission_candidate(
+    state: Dict[str, Any],
+    candidate: Dict[str, Any],
+    hypothesis: Dict[str, Any],
+    fingerprint: str,
+    result_snapshot: Dict[str, Any],
+    evaluation: Dict[str, Any],
+    evidence_ref: str,
+) -> Dict[str, Any]:
+    readiness = _result_snapshot_readiness(result_snapshot)
+    policies = list((hypothesis.get("contract") or {}).get("protected_metrics") or [])
+    root_protected = list(evaluation.get("root_protected_results") or [])
+    if policies and not root_protected:
+        root_protected = _root_protection_from_policies(
+            policies,
+            (state.get("root_baseline") or {}).get("result_evidence") or {},
+            result_snapshot,
+        )
+    root_protection_passed = all(bool(row.get("passed")) for row in root_protected)
+    if not policies:
+        root_protection_passed = True
+
+    entry = {
+        "alpha_id": str(result_snapshot.get("alpha_id") or ""),
+        "fingerprint": fingerprint,
+        "hypothesis_id": str(candidate.get("hypothesis_id") or ""),
+        "hypothesis_status": str(evaluation.get("status") or ""),
+        "parent_id": str(candidate.get("parent_id") or ""),
+        "route_id": (state.get("candidates") or {}).get(fingerprint, {}).get("route_id"),
+        "result_evidence_ref": evidence_ref,
+        "observed_at": result_snapshot.get("observed_at"),
+        "source": result_snapshot.get("source"),
+        "expression": str(candidate.get("expression") or ""),
+        "fields": list(candidate.get("fields") or []),
+        "settings": _copy_json(candidate.get("settings") or {}),
+        "language": str(candidate.get("language") or "").upper(),
+        "metrics": _copy_json(result_snapshot.get("metrics") or {}),
+        "result_evidence": _copy_json(result_snapshot),
+        "readiness": readiness,
+        "protected_policies": _copy_json(policies),
+        "root_protected_results": _copy_json(root_protected),
+        "root_protection_passed": root_protection_passed,
+        "root_metric_deltas": _root_metric_deltas(state, result_snapshot.get("metrics") or {}),
+        "final_selection_eligible": bool(readiness.get("ready") and root_protection_passed),
+    }
+    alpha_id = entry["alpha_id"]
+    if alpha_id:
+        state.setdefault("submission_candidate_archive", {})[alpha_id] = entry
+        # New ready evidence invalidates a prior final comparison. The controller
+        # must compare the enlarged archive again before terminal selection.
+        if readiness.get("ready"):
+            state["submission_candidate_selection"] = None
+    return entry
+
+
+def _refresh_archived_submission_candidate(
+    state: Dict[str, Any],
+    alpha_id: str,
+    result_snapshot: Dict[str, Any],
+) -> None:
+    archive = state.setdefault("submission_candidate_archive", {})
+    entry = archive.get(str(alpha_id))
+    if not isinstance(entry, dict):
+        return
+    policies = list(entry.get("protected_policies") or [])
+    root_protected = _root_protection_from_policies(
+        policies,
+        (state.get("root_baseline") or {}).get("result_evidence") or {},
+        result_snapshot,
+    )
+    root_protection_passed = all(bool(row.get("passed")) for row in root_protected) if policies else True
+    readiness = _result_snapshot_readiness(result_snapshot)
+    entry["observed_at"] = result_snapshot.get("observed_at")
+    entry["source"] = result_snapshot.get("source")
+    entry["metrics"] = _copy_json(result_snapshot.get("metrics") or {})
+    entry["result_evidence"] = _copy_json(result_snapshot)
+    entry["readiness"] = readiness
+    entry["root_protected_results"] = root_protected
+    entry["root_protection_passed"] = root_protection_passed
+    entry["root_metric_deltas"] = _root_metric_deltas(state, result_snapshot.get("metrics") or {})
+    entry["final_selection_eligible"] = bool(readiness.get("ready") and root_protection_passed)
+    archive[str(alpha_id)] = entry
+    selection = state.get("submission_candidate_selection")
+    if isinstance(selection, dict) and str(selection.get("alpha_id")) == str(alpha_id):
+        state["submission_candidate_selection"] = None
+
+
+def _submission_candidate_comparison(state: Dict[str, Any]) -> list[Dict[str, Any]]:
+    rows = []
+    for alpha_id, entry in sorted((state.get("submission_candidate_archive") or {}).items()):
+        if not isinstance(entry, dict):
+            continue
+        readiness = entry.get("readiness") if isinstance(entry.get("readiness"), dict) else {}
+        if not readiness.get("ready"):
+            continue
+        rows.append(
+            {
+                "alpha_id": str(alpha_id),
+                "hypothesis_id": entry.get("hypothesis_id"),
+                "hypothesis_status": entry.get("hypothesis_status"),
+                "parent_id": entry.get("parent_id"),
+                "metrics": _copy_json(entry.get("metrics") or {}),
+                "root_metric_deltas": _copy_json(entry.get("root_metric_deltas") or {}),
+                "root_protection_passed": bool(entry.get("root_protection_passed")),
+                "final_selection_eligible": bool(entry.get("final_selection_eligible")),
+                "root_protected_results": _copy_json(entry.get("root_protected_results") or []),
+                "observed_at": entry.get("observed_at"),
+            }
+        )
+    return rows
+
+
+def _eligible_submission_candidate_ids(state: Dict[str, Any]) -> list[str]:
+    return [
+        str(row["alpha_id"])
+        for row in _submission_candidate_comparison(state)
+        if row.get("final_selection_eligible")
+    ]
 
 
 def _load_mechanism_catalog() -> Dict[str, Any]:
@@ -1628,9 +1805,15 @@ def preflight_candidate(candidate: Dict[str, Any], state: Dict[str, Any] | None 
     return out
 
 
-def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
+def _evaluate_contract(
+    contract: Dict[str, Any],
+    before: Dict[str, Any],
+    after: Dict[str, Any],
+    root: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     before_metrics = _normalize_metrics((before or {}).get("metrics"))
     after_metrics = _normalize_metrics((after or {}).get("metrics"))
+    root_metrics = _normalize_metrics((root or {}).get("metrics")) if root is not None else {}
     before_checks = _normalize_checks((before or {}).get("checks"))
     after_checks = _inherit_warning_policy(before_checks, (after or {}).get("checks"))
     before_check_map = _check_row_map(before_checks)
@@ -1705,6 +1888,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         )
 
     protected_results = []
+    root_protected_results = []
     for policy in contract.get("protected_metrics", []):
         name = policy["name"]
         if name not in before_metrics or name not in after_metrics:
@@ -1727,6 +1911,30 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
             }
         )
 
+        # Parent-relative safety alone is path-dependent: several individually
+        # acceptable promotions can accumulate into a Root-level degradation
+        # that the same frozen tolerance would have rejected in one step. When
+        # Root evidence is supplied, apply the *same predeclared policy* against
+        # immutable Root as a second conjunctive protection gate.
+        if root is not None:
+            if name not in root_metrics:
+                missing.append(f"root_protected_metric:{name}")
+                continue
+            root_value = root_metrics[name]
+            root_passed = (
+                after_value >= root_value - tolerance
+                if policy["rule"] == "not_lower"
+                else after_value <= root_value + tolerance
+            )
+            root_protected_results.append(
+                {
+                    "policy": policy,
+                    "root": root_value,
+                    "after": after_value,
+                    "passed": root_passed,
+                }
+            )
+
     before_check_names = set(before_check_map)
     after_check_names = set(after_check_map)
     missing_prior_checks = before_check_names - after_check_names
@@ -1746,6 +1954,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
     decisive_failure = (
         any(not item["passed"] for item in criterion_results)
         or any(not item["passed"] for item in protected_results)
+        or any(not item["passed"] for item in root_protected_results)
         or bool(new_blockers)
     )
     if decisive_failure:
@@ -1756,6 +1965,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         criterion_results
         and all(item["passed"] for item in criterion_results)
         and all(item["passed"] for item in protected_results)
+        and all(item["passed"] for item in root_protected_results)
         and not new_blockers
     ):
         status = "SUPPORTED"
@@ -1766,6 +1976,7 @@ def _evaluate_contract(contract: Dict[str, Any], before: Dict[str, Any], after: 
         "status": status,
         "criterion_results": criterion_results,
         "protected_results": protected_results,
+        "root_protected_results": root_protected_results,
         "missing": sorted(set(missing)),
         "old_blockers": sorted(old_blockers),
         "candidate_blockers": sorted(_fail_blockers(after_checks)),
@@ -1781,9 +1992,10 @@ def preview_candidate_result(
     contract: Dict[str, Any],
     incumbent_result: Dict[str, Any],
     candidate_result: Dict[str, Any],
+    root_result: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Pure mechanism preview used before deciding whether pending checks must wait."""
-    return _evaluate_contract(contract, incumbent_result, candidate_result)
+    return _evaluate_contract(contract, incumbent_result, candidate_result, root_result)
 
 
 class StateStore:
@@ -1821,6 +2033,8 @@ class StateStore:
             "hypotheses": {},
             "candidates": {},
             "simulations": {},
+            "submission_candidate_archive": {},
+            "submission_candidate_selection": None,
             "run": None,
             "dashboard_context": {"fields": [], "visualization": {}},
             "log_entries": [],
@@ -1841,6 +2055,8 @@ class StateStore:
             state["planning_contract"] = "legacy" if state.get("root_baseline") else "v2"
         state.setdefault("optimization_plan", None)
         state.setdefault("optimization_plan_history", [])
+        state.setdefault("submission_candidate_archive", {})
+        state.setdefault("submission_candidate_selection", None)
         state.setdefault("dashboard_context", {"fields": [], "visualization": {}})
 
         # Read-time compatibility enrichment for pre-v3.3 state snapshots.
@@ -2111,6 +2327,11 @@ class StateStore:
             if _result_fact_fingerprint(previous) == _result_fact_fingerprint(snapshot):
                 incumbent["result_evidence"] = snapshot
                 state["incumbent"] = incumbent
+                _refresh_archived_submission_candidate(
+                    state,
+                    str(incumbent.get("alpha_id") or ""),
+                    snapshot,
+                )
                 self._write(state)
                 return {
                     "ok": True,
@@ -2125,6 +2346,11 @@ class StateStore:
         facts_changed = _result_fact_fingerprint(previous) != _result_fact_fingerprint(snapshot)
         incumbent["result_evidence"] = snapshot
         state["incumbent"] = incumbent
+        _refresh_archived_submission_candidate(
+            state,
+            str(incumbent.get("alpha_id") or ""),
+            snapshot,
+        )
         plan = state.get("optimization_plan")
         if facts_changed and plan and plan.get("status") in {"ACTIVE", "EXHAUSTED"}:
             plan["status"] = "STALE"
@@ -3205,7 +3431,12 @@ class StateStore:
             "metrics": metrics,
             "checks": checks,
         }
-        evaluation = _evaluate_contract(hyp["contract"], state["incumbent"].get("result_evidence", {}), result_snapshot)
+        evaluation = _evaluate_contract(
+            hyp["contract"],
+            state["incumbent"].get("result_evidence", {}),
+            result_snapshot,
+            (state.get("root_baseline") or {}).get("result_evidence", {}),
+        )
         result_evidence_id = f"E_CANDIDATE_RESULT_{fp}"
         criterion_failed = [
             str((item.get("criterion") or {}).get("name") or "")
@@ -3215,6 +3446,11 @@ class StateStore:
         protected_failed = [
             str((item.get("policy") or {}).get("name") or "")
             for item in evaluation.get("protected_results", [])
+            if not item.get("passed")
+        ]
+        root_protected_failed = [
+            str((item.get("policy") or {}).get("name") or "")
+            for item in evaluation.get("root_protected_results", [])
             if not item.get("passed")
         ]
         evidence_record = {
@@ -3227,6 +3463,7 @@ class StateStore:
                 f"Candidate {result_evidence['alpha_id']} for hypothesis {hid} evaluated "
                 f"{evaluation['status']}; failed_success={criterion_failed}; "
                 f"failed_protection={protected_failed}; "
+                f"failed_root_protection={root_protected_failed}; "
                 f"new_blockers={evaluation.get('new_blockers', [])}; "
                 f"new_unresolved={evaluation.get('new_unresolved_checks', [])}."
             ),
@@ -3248,6 +3485,15 @@ class StateStore:
         state["candidates"][fp]["result_evaluation"] = evaluation
         state["candidates"][fp]["result_alpha_id"] = str(result_evidence["alpha_id"])
         state["candidates"][fp]["result_evidence_ref"] = result_evidence_id
+        archived_candidate = _archive_submission_candidate(
+            state,
+            candidate,
+            hyp,
+            fp,
+            result_snapshot,
+            evaluation,
+            result_evidence_id,
+        )
         route_id = state["candidates"][fp].get("route_id") or hyp.get("route_id")
         plan = state.get("optimization_plan")
         if route_id and isinstance(plan, dict):
@@ -3263,6 +3509,7 @@ class StateStore:
             "status": evaluation["status"],
             "evaluation": evaluation,
             "evidence_ref": result_evidence_id,
+            "submission_candidate": archived_candidate if archived_candidate.get("readiness", {}).get("ready") else None,
         }
 
     def promote(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
@@ -3315,6 +3562,72 @@ class StateStore:
             state["optimization_plan"] = plan
         self._write(state)
         return {"promoted": True, "previous_incumbent": previous, "incumbent_alpha_id": snapshot["alpha_id"], "complexity_delta_vs_root": pre.get("complexity_delta_vs_root")}
+
+    def select_submission_candidate(self, alpha_id: str, reason: str) -> Dict[str, Any]:
+        if not str(alpha_id).strip() or not str(reason).strip():
+            return {"ok": False, "reason": "SUBMISSION_SELECTION_CONTRACT"}
+        state = self.read()
+        terminal = _terminal_rejection(state)
+        if terminal:
+            return terminal
+
+        open_hypotheses = [
+            key for key, item in state.get("hypotheses", {}).items()
+            if item.get("status") == "OPEN"
+        ]
+        if open_hypotheses:
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_SELECTION_REQUIRES_NO_OPEN_HYPOTHESIS",
+                "hypotheses": open_hypotheses,
+            }
+        if (state.get("focus") or {}).get("status") == "OPEN":
+            return {"ok": False, "reason": "SUBMISSION_SELECTION_REQUIRES_CLOSED_FOCUS"}
+        plan = state.get("optimization_plan")
+        if plan and plan.get("status") in {"ACTIVE", "STALE"}:
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_SELECTION_REQUIRES_SETTLED_PLAN",
+                "plan_status": plan.get("status"),
+            }
+
+        archive = state.get("submission_candidate_archive") or {}
+        entry = archive.get(str(alpha_id))
+        if not isinstance(entry, dict):
+            return {
+                "ok": False,
+                "reason": "UNKNOWN_SUBMISSION_CANDIDATE",
+                "alpha_id": str(alpha_id),
+                "comparison": _submission_candidate_comparison(state),
+            }
+        if not entry.get("final_selection_eligible"):
+            return {
+                "ok": False,
+                "reason": "SUBMISSION_CANDIDATE_NOT_ELIGIBLE",
+                "alpha_id": str(alpha_id),
+                "entry": entry,
+                "comparison": _submission_candidate_comparison(state),
+            }
+
+        comparison = _submission_candidate_comparison(state)
+        state["submission_candidate_selection"] = {
+            "alpha_id": str(alpha_id),
+            "reason": str(reason).strip(),
+            "selected_at": _now_iso(),
+            "compared_candidate_ids": [
+                str(row["alpha_id"])
+                for row in comparison
+                if row.get("final_selection_eligible")
+            ],
+            "root_relative_comparison": comparison,
+        }
+        self._write(state)
+        return {
+            "ok": True,
+            "alpha_id": str(alpha_id),
+            "selection": state["submission_candidate_selection"],
+        }
+
 
     def set_run_phase_status(self, status: str, detail: str | None = None) -> Dict[str, Any]:
         """Update only the nonterminal run phase marker used by bootstrap recovery."""
@@ -3383,9 +3696,6 @@ class StateStore:
                         "routes": route_violations,
                     }
             elif status == "SUBMISSION_READY":
-                readiness = _submission_readiness(state)
-                if not readiness.get("ready"):
-                    return {"ok": False, "reason": readiness.get("reason"), "readiness": readiness}
                 if plan:
                     if plan.get("status") == "STALE":
                         return {"ok": False, "reason": "PLAN_STALE_REPLAN_REQUIRED"}
@@ -3400,14 +3710,84 @@ class StateStore:
                             "last_final_replan_evidence_revision": _last_final_replan_evidence_revision(plan),
                             "current_evidence_revision": int(state.get("evidence_revision", 0)),
                         }
+
+                eligible = _eligible_submission_candidate_ids(state)
+                if not eligible:
+                    # Preserve current-snapshot readiness diagnostics for runs
+                    # that never produced an archived candidate (including a
+                    # pure readiness check before any optimization plan exists).
+                    current_readiness = _submission_readiness(state)
+                    if not current_readiness.get("ready"):
+                        return {
+                            "ok": False,
+                            "reason": current_readiness.get("reason"),
+                            "readiness": current_readiness,
+                            "comparison": _submission_candidate_comparison(state),
+                        }
                     root_alpha_id = str((state.get("root_baseline") or {}).get("alpha_id") or "")
                     incumbent_alpha_id = str((state.get("incumbent") or {}).get("alpha_id") or "")
-                    if root_alpha_id and incumbent_alpha_id == root_alpha_id:
+                    if plan and root_alpha_id and incumbent_alpha_id == root_alpha_id:
                         return {
                             "ok": False,
                             "reason": "NO_PROMOTION_USE_COMPLETED_WITH_EXHAUSTION",
                             "incumbent_alpha_id": incumbent_alpha_id,
                         }
+
+                    # Compatibility path for a readiness-only run or an older
+                    # in-flight state created before the archive existed.
+                    state["submission_candidate_selection"] = {
+                        "alpha_id": incumbent_alpha_id,
+                        "reason": "Current Incumbent is ready; no evaluated candidate archive exists for this run.",
+                        "selected_at": _now_iso(),
+                        "compared_candidate_ids": [],
+                        "root_relative_comparison": [],
+                        "legacy_current_snapshot_fallback": True,
+                    }
+                    run["submission_candidate_alpha_id"] = incumbent_alpha_id
+                    selection = state["submission_candidate_selection"]
+                else:
+                    selection = state.get("submission_candidate_selection")
+                if eligible and not isinstance(selection, dict):
+                    if len(eligible) == 1:
+                        selected_id = eligible[0]
+                        selection = {
+                            "alpha_id": selected_id,
+                            "reason": "Only Root-protected submission-ready candidate.",
+                            "selected_at": _now_iso(),
+                            "compared_candidate_ids": list(eligible),
+                            "root_relative_comparison": _submission_candidate_comparison(state),
+                        }
+                        state["submission_candidate_selection"] = selection
+                    else:
+                        return {
+                            "ok": False,
+                            "reason": "SUBMISSION_CANDIDATE_SELECTION_REQUIRED",
+                            "eligible_candidate_ids": eligible,
+                            "comparison": _submission_candidate_comparison(state),
+                        }
+
+                selected_id = str(selection.get("alpha_id") or "")
+                if eligible and selected_id not in eligible:
+                    return {
+                        "ok": False,
+                        "reason": "SELECTED_SUBMISSION_CANDIDATE_NOT_ELIGIBLE",
+                        "selected_alpha_id": selected_id,
+                        "eligible_candidate_ids": eligible,
+                        "comparison": _submission_candidate_comparison(state),
+                    }
+                if eligible:
+                    selected_entry = (state.get("submission_candidate_archive") or {}).get(selected_id) or {}
+                    selected_readiness = _result_snapshot_readiness(
+                        selected_entry.get("result_evidence") or {}
+                    )
+                    if not selected_readiness.get("ready"):
+                        return {
+                            "ok": False,
+                            "reason": selected_readiness.get("reason"),
+                            "readiness": selected_readiness,
+                            "selected_alpha_id": selected_id,
+                        }
+                    run["submission_candidate_alpha_id"] = selected_id
             elif plan and plan.get("status") == "ACTIVE" and any(route.get("status") == "ACTIVE" for route in plan.get("routes", [])):
                 return {"ok": False, "reason": "ACTIVE_ROUTE_EXISTS"}
         run["status"] = status
@@ -3415,7 +3795,12 @@ class StateStore:
         run["end_reason"] = reason.strip()
         state["run"] = run
         self._write(state)
-        return {"ok": True, "status": status, "run": run}
+        return {
+            "ok": True,
+            "status": status,
+            "run": run,
+            "submission_candidate_selection": state.get("submission_candidate_selection"),
+        }
 
     def summary(self) -> Dict[str, Any]:
         state = self.read()
@@ -3439,6 +3824,8 @@ class StateStore:
             "hypotheses": {k: v.get("status") for k, v in state.get("hypotheses", {}).items()},
             "simulation_states": {k: v.get("status") for k, v in state.get("simulations", {}).items()},
             "submission_readiness": _submission_readiness(state),
+            "submission_candidate_archive": _submission_candidate_comparison(state),
+            "submission_candidate_selection": state.get("submission_candidate_selection"),
             "dashboard_context": state.get("dashboard_context", {}),
         }
 
@@ -3546,6 +3933,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
     p = sub.add_parser("set-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--type", required=True); p.add_argument("--owner", required=True); p.add_argument("--target", required=True); p.add_argument("--blocker"); p.add_argument("--route-id"); p.add_argument("--evidence-ref", action="append", required=True)
     p = sub.add_parser("exhaust-focus"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--evidence-ref")
     p = sub.add_parser("finish-run"); p.add_argument("--status", required=True, choices=sorted(RUN_TERMINAL_STATUSES)); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
+    p = sub.add_parser("select-submission-candidate"); p.add_argument("--alpha-id", required=True); p.add_argument("--reason", required=True); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True)
     p = sub.add_parser("open-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--id", required=True); p.add_argument("--contract", required=True)
     p = sub.add_parser("withdraw-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("abandon-hypothesis"); p.add_argument("--state", required=True); p.add_argument("--root-alpha-id", required=True); p.add_argument("--hypothesis-id", required=True); p.add_argument("--evidence-ref", required=True); p.add_argument("--reason", required=True)
@@ -3576,6 +3964,7 @@ def _main(argv: Iterable[str] | None = None) -> int:
         elif args.cmd == "set-focus": out = StateStore(args.state, args.root_alpha_id).set_focus(args.type, args.owner, args.target, args.evidence_ref, args.blocker, args.route_id)
         elif args.cmd == "exhaust-focus": out = StateStore(args.state, args.root_alpha_id).exhaust_focus(args.reason, args.evidence_ref)
         elif args.cmd == "finish-run": out = StateStore(args.state, args.root_alpha_id).finish_run(args.status, args.reason)
+        elif args.cmd == "select-submission-candidate": out = StateStore(args.state, args.root_alpha_id).select_submission_candidate(args.alpha_id, args.reason)
         elif args.cmd == "open-hypothesis": out = StateStore(args.state, args.root_alpha_id).open_hypothesis(args.id, _load_json_arg(args.contract))
         elif args.cmd == "withdraw-hypothesis": out = StateStore(args.state, args.root_alpha_id).withdraw_hypothesis(args.hypothesis_id, args.reason)
         elif args.cmd == "abandon-hypothesis": out = StateStore(args.state, args.root_alpha_id).abandon_hypothesis(args.hypothesis_id, args.evidence_ref, args.reason)
