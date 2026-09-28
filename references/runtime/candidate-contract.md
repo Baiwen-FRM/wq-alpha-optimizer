@@ -54,9 +54,19 @@ Guard 会按 `kind / subject / source / claim` 保存一个 informational conten
   "subject": "field_b",
   "source": "BRAIN:get_data_fields",
   "observed_at": "...Z",
-  "claim": "field_b is verified in the same existing dataset/scope as the incumbent source."
+  "claim": "field_b is verified in the same existing dataset/scope as the incumbent source.",
+  "field_metadata": {
+    "name": "field_b",
+    "type": "MATRIX",
+    "dataset": "pv1",
+    "coverage": 1.0,
+    "dateCoverage": 1.0,
+    "description": "Exact platform description"
+  }
 }
 ```
+
+`FIELD_SCOPE.field_metadata` 是 evidence 本身的一部分，会进入 immutable content fingerprint。`allow-field` 只有在 metadata 结构完整且 `field_metadata.name == subject` 时才允许字段进入 allowlist，并把 metadata 合并到 Dashboard registry。Registry 可以包含尚未被 candidate 使用的已授权字段，但首页 `Field Information` 只显示当前 Incumbent 实际使用的 fields；promotion 后因此能立即显示新字段的 exact metadata，而不是 `unknown`。
 
 ## 3. Evidence synthesis + optimization plan
 
